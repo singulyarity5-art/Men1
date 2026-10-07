@@ -4,11 +4,13 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from aiogram import BaseMiddleware, Bot
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import BaseFilter
 from aiogram.types import CallbackQuery, Message, TelegramObject, User as TgUser
 
 import keyboards as kb
 from database import Database
+from states import VipPaymentStates
 
 
 class IsAdminFilter(BaseFilter):
@@ -22,7 +24,16 @@ class IsAdminFilter(BaseFilter):
 
 
 async def is_subscribed_to_all(bot: Bot, db: Database, telegram_id: int) -> list:
-    """Obuna bo'lmagan kanallar ro'yxatini qaytaradi (bo'sh bo'lsa — hammasiga obuna)."""
+    """
+    Obuna bo'lmagan (yoki holatini ANIQLAB BO'LMAGAN) kanallar ro'yxatini qaytaradi
+    (bo'sh ro'yxat = hammasiga obuna tasdiqlangan).
+
+    Agar bot shu kanal/guruhda admin qilib qo'shilmagan bo'lsa (yoki chat topilmasa),
+    foydalanuvchining haqiqiy obunasini TASDIQLAB bo'lmaydi — xavfsizlik uchun bu
+    holat ham "obuna emas" deb hisoblanadi (silently o'tkazib yuborilmaydi), va
+    natijadagi qatorga "_bot_not_admin" belgisi qo'shiladi — shu orqali chaqiruvchi
+    kod (build_subscribe_prompt) foydalanuvchiga aniq sabab ko'rsata oladi.
+    """
     channels = await db.list_required_channels()
     missing = []
     for ch in channels:
@@ -30,12 +41,77 @@ async def is_subscribed_to_all(bot: Bot, db: Database, telegram_id: int) -> list
             member = await bot.get_chat_member(chat_id=ch["chat_id"], user_id=telegram_id)
             if member.status in ("left", "kicked"):
                 missing.append(ch)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            # Odatda bu "bot kanalda admin emas" yoki "chat topilmadi" degani.
+            row = dict(ch)
+            row["_bot_not_admin"] = True
+            missing.append(row)
         except Exception:
-            # Bot kanalga admin qilib qo'shilmagan yoki chat topilmadi —
-            # bunday holatda foydalanuvchini bloklamaslik uchun o'tkazib yuboramiz,
-            # lekin adminlar buni logdan ko'rishi mumkin.
+            # Kutilmagan/noma'lum xato — avvalgidek, foydalanuvchini bloklamaymiz.
             continue
     return missing
+
+
+def build_subscribe_prompt(missing: list) -> tuple[str, "kb.InlineKeyboardMarkup"]:
+    """
+    is_subscribed_to_all() natijasidan foydalanuvchiga ko'rsatiladigan matn va
+    klaviaturani tayyorlaydi. Agar kanallardan birortasida bot admin emasligi
+    aniqlangan bo'lsa (ko'rinishidan sabab shu), aniq diagnostika xabari chiqadi.
+    """
+    bot_issue = any(isinstance(ch, dict) and ch.get("_bot_not_admin") for ch in missing)
+    if bot_issue:
+        text = (
+            "⚠️ Bot kanal/guruhda admin emas. Kanal sozlamalaridan botga admin huquqi bering.\n\n"
+            "Shundan keyin ✅ Tekshirish tugmasini qayta bosing."
+        )
+    else:
+        text = (
+            "📢 Davom etish uchun quyidagi majburiy kanal(lar)ga obuna bo'ling, "
+            "so'ng ✅ Tekshirish tugmasini bosing:"
+        )
+    return text, kb.subscribe_keyboard(missing)
+
+
+async def build_anime_card_text(db: Database, anime) -> str:
+    """
+    Anime haqida avtomatik, bir xil ko'rinishdagi matn tayyorlaydi — admin buni
+    qo'lda yozmaydi, database ma'lumotlaridan hosil bo'ladi. Shu funksiya HAM
+    anime sahifasida (user.py), HAM kanalga e'lon qilishda (admin.py) bir xil
+    ko'rinishni ta'minlash uchun qayta ishlatiladi (ikki joyda alohida-alohida
+    yozilmaydi).
+    """
+    genres = await db.get_anime_genres(anime["id"])
+    genre_txt = ", ".join(g["name"] for g in genres) or "—"
+    seasons = await db.list_seasons(anime["id"])
+    ep_count = await db.count_episodes(anime["id"])
+    avg, rated_count = await db.anime_avg_rating(anime["id"])
+
+    lines = [
+        f"🎬 <b>{anime['title']}</b>",
+        f"🆔 Anime ID: <code>{anime['anime_code']}</code>",
+        "",
+        f"🎭 Janr: {genre_txt}",
+    ]
+    if anime["country"]:
+        lines.append(f"🌍 Davlat: {anime['country']}")
+    if anime["release_year"]:
+        lines.append(f"📅 Yil: {anime['release_year']}")
+    if seasons:
+        lines.append(f"🎬 {len(seasons)} fasl • {ep_count} qism")
+    elif ep_count == 1:
+        lines.append("🎬 Film")
+    elif ep_count > 1:
+        lines.append(f"🎬 {ep_count} qism")
+    if anime["language"]:
+        lines.append(f"🇺🇿 Til: {anime['language']}")
+    lines.append("")
+    if anime["description"]:
+        lines.append(f"📖 {anime['description']}")
+    lines.append("")
+    lines.append(f"⭐ Reyting: {avg}/10" if rated_count else "⭐ Reyting: hali baholanmagan")
+    if anime["is_vip"]:
+        lines.append("\n💎 VIP anime")
+    return "\n".join(lines)
 
 
 async def has_vip_access(db: Database, telegram_id: int) -> bool:
@@ -59,7 +135,7 @@ class SubscriptionMiddleware(BaseMiddleware):
     Endi har bir harakatda (admin va /start/✅ Tekshirishdan tashqari) tekshiriladi.
     """
 
-    SKIP_CALLBACKS = {"check_subs"}
+    SKIP_CALLBACKS = {"check_subs", "vip_open"}
 
     async def __call__(
         self,
@@ -75,7 +151,7 @@ class SubscriptionMiddleware(BaseMiddleware):
             if event.text and event.text.startswith("/start"):
                 return await handler(event, data)
         elif isinstance(event, CallbackQuery):
-            if event.data in self.SKIP_CALLBACKS:
+            if event.data in self.SKIP_CALLBACKS or (event.data and event.data.startswith("vip_buy:")):
                 return await handler(event, data)
         else:
             return await handler(event, data)
@@ -87,14 +163,18 @@ class SubscriptionMiddleware(BaseMiddleware):
         if await db.is_admin(tg_user.id):
             return await handler(event, data)
 
+        # "💎 VIP olish" majburiy obuna oynasidan ham chaqirilishi mumkin (talab
+        # qilingan) — shuning uchun to'lov skrinshotini kutish bosqichida ham
+        # obuna tekshiruvi bloklamasligi kerak, aks holda oqim yarim yo'lda to'xtab qoladi.
+        state = data.get("state")
+        if state is not None:
+            current = await state.get_state()
+            if current == VipPaymentStates.waiting_screenshot.state:
+                return await handler(event, data)
+
         missing = await is_subscribed_to_all(bot, db, tg_user.id)
         if missing:
-            text = (
-                "📢 Davom etish uchun quyidagi majburiy kanal(lar)ga obuna bo'ling "
-                "(shekilli, avval obuna bo'lgan kanal(lar)dan chiqib ketgansiz), "
-                "so'ng ✅ Tekshirish tugmasini bosing:"
-            )
-            markup = kb.subscribe_keyboard(missing)
+            text, markup = build_subscribe_prompt(missing)
             if isinstance(event, CallbackQuery):
                 await event.answer("❗ Majburiy kanal(lar)ga obuna talab qilinadi.", show_alert=True)
                 try:

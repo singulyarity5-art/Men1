@@ -19,16 +19,34 @@ import config
 
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="🔎 Anime qidirish")],
+        [KeyboardButton(text="🎬 Anime ko'rish")],
         [KeyboardButton(text="📚 Katalog"), KeyboardButton(text="🆕 Yangi animelar")],
         [KeyboardButton(text="🔥 Mashhur animelar"), KeyboardButton(text="🔥 Yangi qismlar")],
         [KeyboardButton(text="❤️ Sevimlilar"), KeyboardButton(text="🎭 Janrlar")],
-        [KeyboardButton(text="🕐 Ko'rish tarixi"), KeyboardButton(text="🎲 Tasodifiy anime")],
+        [KeyboardButton(text="🕐 Ko'rish tarixi")],
         [KeyboardButton(text="👤 Profil"), KeyboardButton(text="🆘 Yordam")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Admin panel")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def anime_browse_hub_keyboard() -> InlineKeyboardMarkup:
+    """
+    '🎬 Anime ko'rish' bosilganda chiqadigan markaz: 🎲 Tasodifiy Anime shu yerga
+    ko'chirildi (asosiy menyuda alohida tugma sifatida endi yo'q), qolgan mavjud
+    anime ko'rish funksiyalariga ham qulay kirish uchun.
+    """
+    b = InlineKeyboardBuilder()
+    b.button(text="🔎 Anime qidirish", callback_data="browse:search")
+    b.button(text="📚 Katalog", callback_data="browse:catalog")
+    b.button(text="🎭 Janrlar", callback_data="browse:genres")
+    b.button(text="🆕 Yangi animelar", callback_data="browse:new")
+    b.button(text="🔥 Mashhur animelar", callback_data="browse:popular")
+    b.button(text="🔥 Yangi qismlar", callback_data="browse:recent_episodes")
+    b.button(text="🎲 Tasodifiy Anime", callback_data="browse:random")
+    b.adjust(1)
+    return b.as_markup()
 
 
 def admin_back_to_user_menu() -> ReplyKeyboardMarkup:
@@ -115,14 +133,26 @@ def anime_list_keyboard(anime_rows, page: int, total_pages: int, list_kind: str)
     return b.as_markup()
 
 
-def anime_detail_keyboard(anime_id: int, is_favorite: bool, is_following: bool, has_seasons: bool = False) -> InlineKeyboardMarkup:
+def anime_detail_keyboard(
+    anime_id: int,
+    is_favorite: bool,
+    is_following: bool,
+    has_seasons: bool = False,
+    single_episode_id: int | None = None,
+) -> InlineKeyboardMarkup:
     """
     Eslatma: "⭐ Baholash" tugmasi endi bu yerda YO'Q — u endi foydalanuvchi biror
     qismni ochib ko'rgandan KEYIN chiqadi (qarang: post_watch_rate_keyboard).
+
+    single_episode_id — agar anime fasllarsiz va atigi 1 qismdan iborat bo'lsa
+    (film), "qismlar ro'yxati" bosqichi o'tkazib yuborilib, to'g'ridan-to'g'ri
+    video ochiladigan qilib beriladi.
     """
     b = InlineKeyboardBuilder()
     if has_seasons:
         b.button(text="🎬 Fasllarni ko'rish", callback_data=f"seasons:{anime_id}")
+    elif single_episode_id:
+        b.button(text="▶️ Ko'rish", callback_data=f"watch:{single_episode_id}")
     else:
         b.button(text="▶️ Qismlarni ko'rish", callback_data=f"episodes:{anime_id}:0:0")
     fav_text = "💔 Sevimlilardan olib tashlash" if is_favorite else "❤️ Sevimlilarga qo'shish"
@@ -283,6 +313,7 @@ def subscribe_keyboard(channels) -> InlineKeyboardMarkup:
         b.button(text=f"📢 {title}", url=link)
     b.adjust(1)
     b.row(InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_subs"))
+    b.row(InlineKeyboardButton(text="💎 VIP olish", callback_data="vip_open"))
     return b.as_markup()
 
 
@@ -323,6 +354,15 @@ def admin_panel_menu() -> InlineKeyboardMarkup:
 def admin_back_button(target: str = "adm:panel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ Orqaga", callback_data=target)
+    return b.as_markup()
+
+
+def vip_granted_all_keyboard() -> InlineKeyboardMarkup:
+    """'🎉 Barcha foydalanuvchilarga VIP berildi!' xabari ostidagi tugmalar."""
+    b = InlineKeyboardBuilder()
+    b.button(text="💎 VIP animelarga kirish", callback_data="browse:catalog")
+    b.button(text="🎬 Anime ko'rish", callback_data="browse:hub")
+    b.adjust(1)
     return b.as_markup()
 
 
@@ -410,6 +450,9 @@ def admin_anime_detail_keyboard(anime_id: int, has_seasons: bool = False) -> Inl
         b.button(text="➕ Qism qo'shish (video yuborish)", callback_data=f"adm:add_episode:{anime_id}")
     b.button(text="✏️ Nomi", callback_data=f"adm:edit_title:{anime_id}")
     b.button(text="✏️ Tavsifi", callback_data=f"adm:edit_desc:{anime_id}")
+    b.button(text="✏️ Davlat", callback_data=f"adm:edit_country:{anime_id}")
+    b.button(text="✏️ Yil", callback_data=f"adm:edit_year:{anime_id}")
+    b.button(text="✏️ Til", callback_data=f"adm:edit_language:{anime_id}")
     b.button(text="🎭 Janrlarni o'zgartirish", callback_data=f"adm:edit_genres:{anime_id}")
     b.button(text="📢 Kanalga e'lon qilish", callback_data=f"adm:announce:{anime_id}")
     b.button(text="🗑 O'chirish", callback_data=f"adm:delete_anime_confirm:{anime_id}")

@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS anime (
     title        TEXT NOT NULL,
     description  TEXT,
     poster_file_id TEXT,
+    country      TEXT,                    -- masalan "Yaponiya" (ixtiyoriy, admin kiritadi)
+    release_year TEXT,                    -- masalan "2013" yoki "2013–2023" (ixtiyoriy)
+    language     TEXT DEFAULT 'O''zbek',  -- anime kartasida ko'rsatiladigan til
     is_vip       INTEGER NOT NULL DEFAULT 0,
     is_published INTEGER NOT NULL DEFAULT 1,
     created_at   TEXT NOT NULL
@@ -244,6 +247,18 @@ class Database:
             await self.conn.execute("ALTER TABLE required_channels ADD COLUMN invite_link TEXT")
             await self.conn.commit()
 
+        # Anime kartasi uchun qo'shimcha maydonlar (davlat / yil / til) — eski bazalarga xavfsiz qo'shiladi
+        cur = await self.conn.execute("PRAGMA table_info(anime)")
+        anime_cols = {row[1] for row in await cur.fetchall()}
+        if "country" not in anime_cols:
+            await self.conn.execute("ALTER TABLE anime ADD COLUMN country TEXT")
+        if "release_year" not in anime_cols:
+            await self.conn.execute("ALTER TABLE anime ADD COLUMN release_year TEXT")
+        if "language" not in anime_cols:
+            await self.conn.execute("ALTER TABLE anime ADD COLUMN language TEXT DEFAULT 'O''zbek'")
+        if {"country", "release_year", "language"} - anime_cols:
+            await self.conn.commit()
+
         # Fasllar (seasons) tizimi: eski "episodes" jadvalida season_id ustuni
         # bo'lmasa — jadvalni xavfsiz qayta quramiz (barcha eski qismlar
         # season_id=NULL, ya'ni "oddiy anime" sifatida saqlanib qoladi,
@@ -352,6 +367,12 @@ class Database:
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         dest = os.path.join(config.BACKUP_DIR, f"anime_{stamp}.db")
         await self.conn.commit()
+        try:
+            # WAL rejimida yangi ma'lumotlar -wal faylida turishi mumkin;
+            # nusxa olishdan oldin ularni asosiy faylga yozib olamiz.
+            await self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            logger.exception("wal_checkpoint xatolik")
         shutil.copyfile(self.path, dest)
         logger.info("Backup yaratildi: %s", dest)
         return dest

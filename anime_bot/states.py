@@ -21,6 +21,9 @@ class EditAnimeStates(StatesGroup):
     waiting_new_title = State()
     waiting_new_description = State()
     waiting_genres = State()
+    waiting_new_country = State()
+    waiting_new_year = State()
+    waiting_new_language = State()
 
 
 class AddEpisodeStates(StatesGroup):

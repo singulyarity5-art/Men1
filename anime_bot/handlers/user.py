@@ -13,13 +13,31 @@ from aiogram.exceptions import TelegramBadRequest
 
 import keyboards as kb
 from database import Database
-from handlers.common import ensure_user, fmt_number, has_vip_access, is_subscribed_to_all
+from handlers.common import (
+    build_anime_card_text,
+    build_subscribe_prompt,
+    ensure_user,
+    fmt_number,
+    has_vip_access,
+    is_subscribed_to_all,
+)
 from states import SearchStates, VipPaymentStates
 
 logger = logging.getLogger("anime_bot.user")
 router = Router(name="user")
 
 PER_PAGE = 10
+
+
+async def _single_episode_id(db: Database, anime_id: int, has_seasons: bool) -> int | None:
+    """Agar anime fasllarsiz va atigi 1 qismdan iborat bo'lsa (film), o'sha qismning ID'sini qaytaradi."""
+    if has_seasons:
+        return None
+    ep_count = await db.count_episodes(anime_id)
+    if ep_count != 1:
+        return None
+    eps = await db.list_episodes_page(anime_id, 0, None)
+    return eps[0]["id"] if eps else None
 
 
 async def _vip_free_banner(db: Database) -> str:
@@ -43,11 +61,8 @@ async def cmd_start(message: Message, db: Database, state: FSMContext):
 
     missing = await is_subscribed_to_all(message.bot, db, message.from_user.id)
     if missing:
-        await message.answer(
-            "📢 Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling, "
-            "so'ng ✅ Tekshirish tugmasini bosing:",
-            reply_markup=kb.subscribe_keyboard(missing),
-        )
+        text, markup = build_subscribe_prompt(missing)
+        await message.answer(text, reply_markup=markup)
         return
 
     # Kanaldagi "▶️ Animeni ko'rish" tugmasi orqali kirilgan bo'lishi mumkin:
@@ -211,10 +226,11 @@ async def popular_anime(message: Message, db: Database):
 
 
 @router.message(F.text == "🔥 Yangi qismlar")
-async def recent_episodes(message: Message, db: Database):
+async def recent_episodes(message: Message, db: Database, telegram_id: int | None = None):
     """Oldindan mavjud animelarga yaqinda qo'shilgan qismlar (🆕 Yangi animelardan farqli)."""
+    telegram_id = telegram_id or message.from_user.id
     rows = await db.list_recent_episodes(limit=50)
-    viewer_has_vip = await has_vip_access(db, message.from_user.id)
+    viewer_has_vip = await has_vip_access(db, telegram_id)
     visible = [r for r in rows if viewer_has_vip or not r["anime_is_vip"]]
     visible = visible[:PER_PAGE]
     if not visible:
@@ -224,18 +240,82 @@ async def recent_episodes(message: Message, db: Database):
 
 
 @router.message(F.text == "🎲 Tasodifiy anime")
-async def random_anime(message: Message, db: Database):
+async def random_anime(message: Message, db: Database, telegram_id: int | None = None):
+    """
+    MUHIM: bu funksiya (random tanlash/VIP filtrlash mantig'i) o'zgartirilmagan —
+    faqat qayerdan chaqirilishi o'zgardi: endi asosiy menyuda alohida tugma emas,
+    balki "🎬 Anime ko'rish" markazi ichida (va eski matnli buyruq ham ishlayveradi).
+    """
+    telegram_id = telegram_id or message.from_user.id
     rows = await db.all_anime_for_random()
     if not rows:
         await message.answer("Hozircha anime qo'shilmagan.")
         return
-    viewer_has_vip = await has_vip_access(db, message.from_user.id)
+    viewer_has_vip = await has_vip_access(db, telegram_id)
     candidates = [a for a in rows if viewer_has_vip or not a["is_vip"]]
     if not candidates:
         candidates = rows  # hammasi VIP bo'lsa ham ko'rsatamiz — anime sahifasi o'zi bloklaydi
     anime = random.choice(candidates)
     await message.answer("🎲 Bugungi tasodifiy anime:")
-    await show_anime_detail(message, db, anime["id"], message.from_user.id)
+    await show_anime_detail(message, db, anime["id"], telegram_id)
+
+
+# ------------------------------------------------------------------ #
+# "🎬 Anime ko'rish" markazi — mavjud brauzing funksiyalarini (qayta
+# yozmasdan) bitta joydan ochish uchun. Har bir tugma MAVJUD funksiyani
+# chaqiradi, yangi parallel mantiq yaratilmaydi.
+# ------------------------------------------------------------------ #
+@router.message(F.text == "🎬 Anime ko'rish")
+async def anime_browse_hub(message: Message):
+    await message.answer("🎬 Anime ko'rish:", reply_markup=kb.anime_browse_hub_keyboard())
+
+
+@router.callback_query(F.data == "browse:hub")
+async def browse_hub_cb(call: CallbackQuery):
+    await call.answer()
+    await call.message.answer("🎬 Anime ko'rish:", reply_markup=kb.anime_browse_hub_keyboard())
+
+
+@router.callback_query(F.data == "browse:search")
+async def browse_search(call: CallbackQuery, state: FSMContext, db: Database):
+    await call.answer()
+    await search_entry(call.message, state, db)
+
+
+@router.callback_query(F.data == "browse:catalog")
+async def browse_catalog(call: CallbackQuery, db: Database):
+    await call.answer()
+    await catalog(call.message, db)
+
+
+@router.callback_query(F.data == "browse:genres")
+async def browse_genres(call: CallbackQuery, db: Database):
+    await call.answer()
+    await genres_list(call.message, db)
+
+
+@router.callback_query(F.data == "browse:new")
+async def browse_new(call: CallbackQuery, db: Database):
+    await call.answer()
+    await new_anime(call.message, db)
+
+
+@router.callback_query(F.data == "browse:popular")
+async def browse_popular(call: CallbackQuery, db: Database):
+    await call.answer()
+    await popular_anime(call.message, db)
+
+
+@router.callback_query(F.data == "browse:recent_episodes")
+async def browse_recent_episodes(call: CallbackQuery, db: Database):
+    await call.answer()
+    await recent_episodes(call.message, db, telegram_id=call.from_user.id)
+
+
+@router.callback_query(F.data == "browse:random")
+async def browse_random(call: CallbackQuery, db: Database):
+    await call.answer()
+    await random_anime(call.message, db, telegram_id=call.from_user.id)
 
 
 @router.message(F.text == "📚 Katalog")
@@ -345,28 +425,19 @@ async def show_anime_detail(message: Message, db: Database, anime_id: int, viewe
         await message.answer(text, reply_markup=kb.profile_keyboard())
         return
 
-    genres = await db.get_anime_genres(anime_id)
-    genre_txt = ", ".join(f"{g['emoji']} {g['name']}" for g in genres) or "—"
-    avg, count = await db.anime_avg_rating(anime_id)
     ep_count = await db.count_episodes(anime_id)
     is_fav = await db.is_favorite(anime_id, viewer_telegram_id)
     is_following = await db.is_following(anime_id, viewer_telegram_id)
     seasons = await db.list_seasons(anime_id)
     has_seasons = bool(seasons)
 
-    rating_txt = f"{avg}⭐ ({count} baho)" if count else "hali baholanmagan"
-    season_line = f"📁 Fasllar soni: {len(seasons)}\n" if has_seasons else ""
-    caption = (
-        f"🎬 <b>{anime['title']}</b>\n"
-        f"🆔 ID: <code>{anime['anime_code']}</code>\n"
-        f"🎭 Janr: {genre_txt}\n"
-        f"⭐ Reyting: {rating_txt}\n"
-        f"{season_line}"
-        f"📼 Qismlar soni: {ep_count}\n"
-        f"{'💎 VIP anime' if anime['is_vip'] else ''}\n\n"
-        f"{anime['description'] or ''}"
-    )
-    markup = kb.anime_detail_keyboard(anime_id, is_fav, is_following, has_seasons)
+    # Agar anime fasllarsiz va atigi 1 qismdan iborat bo'lsa (masalan, film) —
+    # "1-fasl"/"1-qism" kabi keraksiz oraliq qadam ko'rsatilmaydi: tugma
+    # to'g'ridan-to'g'ri videoni ochadi (mavjud watch: oqimi orqali).
+    single_episode_id = await _single_episode_id(db, anime_id, has_seasons)
+
+    caption = await build_anime_card_text(db, anime)
+    markup = kb.anime_detail_keyboard(anime_id, is_fav, is_following, has_seasons, single_episode_id)
     if anime["poster_file_id"]:
         await message.answer_photo(anime["poster_file_id"], caption=caption, reply_markup=markup)
     else:
@@ -406,9 +477,10 @@ async def toggle_follow_cb(call: CallbackQuery, db: Database):
         return
     is_fav = await db.is_favorite(anime_id, call.from_user.id)
     seasons = await db.list_seasons(anime_id)
+    single_episode_id = await _single_episode_id(db, anime_id, bool(seasons))
     try:
         await call.message.edit_reply_markup(
-            reply_markup=kb.anime_detail_keyboard(anime_id, is_fav, following, bool(seasons))
+            reply_markup=kb.anime_detail_keyboard(anime_id, is_fav, following, bool(seasons), single_episode_id)
         )
     except TelegramBadRequest:
         pass
@@ -435,9 +507,10 @@ async def toggle_fav(call: CallbackQuery, db: Database):
     is_fav = await db.is_favorite(anime_id, call.from_user.id)
     is_following = await db.is_following(anime_id, call.from_user.id)
     seasons = await db.list_seasons(anime_id)
+    single_episode_id = await _single_episode_id(db, anime_id, bool(seasons))
     try:
         await call.message.edit_reply_markup(
-            reply_markup=kb.anime_detail_keyboard(anime_id, is_fav, is_following, bool(seasons))
+            reply_markup=kb.anime_detail_keyboard(anime_id, is_fav, is_following, bool(seasons), single_episode_id)
         )
     except TelegramBadRequest:
         pass
@@ -546,7 +619,14 @@ async def _send_episode(db: Database, bot: Bot, telegram_id: int, anime, episode
     )
     await db.log_watch(telegram_id, anime["id"], episode["id"])
     await db.set_watch_progress(telegram_id, anime["id"], episode["id"])
-    if not await db.has_rated(anime["id"], telegram_id):
+
+    # Baholash FAQAT animening eng oxirgi qismi (barcha fasllar bo'yicha haqiqiy
+    # oxirgisi, fasl oxiri emas) tomosha qilingandan keyin chiqadi.
+    # get_next_episode() fasldan-faslga to'g'ri o'tadi, shuning uchun bu yerda
+    # "keyingi qism yo'q" = "bu animening haqiqiy oxirgi qismi" degani.
+    next_ep = await db.get_next_episode(anime["id"], episode["id"])
+    is_final_episode = next_ep is None
+    if is_final_episode and not await db.has_rated(anime["id"], telegram_id):
         await bot.send_message(
             telegram_id,
             "Ushbu animeni baholashni unutmang 👇",

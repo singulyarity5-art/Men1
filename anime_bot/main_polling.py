@@ -63,14 +63,26 @@ async def vip_expiry_watcher(bot: Bot, db: Database) -> None:
         await asyncio.sleep(600)
 
 
-async def daily_backup_job(db: Database) -> None:
-    """Har 24 soatda avtomatik zaxira nusxa oladi."""
+async def daily_backup_job(bot: Bot, db: Database) -> None:
+    """Har 24 soatda zaxira nusxa olib, SUPER_ADMIN_IDS ga Telegram orqali yuboradi."""
+    from aiogram.types import FSInputFile
+
     while True:
         await asyncio.sleep(24 * 60 * 60)
         try:
-            await db.backup()
+            path = await db.backup()
         except Exception:
             logger.exception("daily_backup_job xatolik")
+            continue
+        for admin_id in config.SUPER_ADMIN_IDS:
+            try:
+                await bot.send_document(
+                    admin_id,
+                    FSInputFile(path),
+                    caption="💾 Avtomatik kunlik zaxira nusxa.",
+                )
+            except Exception:
+                logger.exception("Zaxirani adminga yuborib bo'lmadi: %s", admin_id)
 
 
 async def daily_random_announcement(bot: Bot, db: Database) -> None:
@@ -113,8 +125,10 @@ async def main() -> None:
     dp["db"] = db
 
     # Har bir harakatda majburiy obunani qayta tekshiradigan middleware
-    dp.message.outer_middleware(SubscriptionMiddleware())
-    dp.callback_query.outer_middleware(SubscriptionMiddleware())
+    # (Inner) middleware — shunda data["state"] (FSMContext) kafolatlangan holda
+    # mavjud bo'ladi, bu "💎 VIP olish" oqimini obunasiz ham ishlashi uchun kerak.
+    dp.message.middleware(SubscriptionMiddleware())
+    dp.callback_query.middleware(SubscriptionMiddleware())
 
     dp.include_router(admin.router)  # admin filtri o'zida bo'lgani uchun avval ulaymiz
     dp.include_router(user.router)
@@ -123,7 +137,7 @@ async def main() -> None:
 
     background_tasks = [
         asyncio.create_task(vip_expiry_watcher(bot, db)),
-        asyncio.create_task(daily_backup_job(db)),
+        asyncio.create_task(daily_backup_job(bot, db)),
         asyncio.create_task(daily_random_announcement(bot, db)),
     ]
 
