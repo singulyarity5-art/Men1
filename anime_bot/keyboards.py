@@ -227,9 +227,16 @@ def rating_keyboard(anime_id: int) -> InlineKeyboardMarkup:
 def episode_upload_keyboard() -> InlineKeyboardMarkup:
     """Qism (video) yuklash jarayonida ko'rsatiladigan ✅ Tayyor / ❌ Bekor qilish tugmalari."""
     b = InlineKeyboardBuilder()
+    b.button(text="🟡 Filler qo'shish (video kerak emas)", callback_data="adm:episodes_filler")
     b.button(text="✅ Tayyor", callback_data="adm:episodes_done")
     b.button(text="❌ Bekor qilish", callback_data="adm:episodes_cancel")
-    b.adjust(2)
+    b.adjust(1, 2)
+    return b.as_markup()
+
+
+def episode_filler_back_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Orqaga", callback_data="adm:episodes_filler_back")
     return b.as_markup()
 
 
@@ -237,6 +244,8 @@ def episodes_keyboard(anime_id: int, episodes, page: int, total_episodes: int, s
     """season_token: "0" = fasllarsiz (oddiy) anime, aks holda season_id (str)."""
     b = InlineKeyboardBuilder()
     for ep in episodes:
+        if ep["is_filler"]:
+            continue  # filler qismda video yo'q — tugma ko'rsatilmaydi, matnda "filler" deb yoziladi
         b.button(text=str(ep["episode_number"]), callback_data=f"watch:{ep['id']}")
     b.adjust(config.EPISODE_BUTTONS_COLUMNS)
 

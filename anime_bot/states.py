@@ -28,6 +28,7 @@ class EditAnimeStates(StatesGroup):
 
 class AddEpisodeStates(StatesGroup):
     waiting_video = State()
+    waiting_filler_count = State()
 
 
 class BroadcastStates(StatesGroup):

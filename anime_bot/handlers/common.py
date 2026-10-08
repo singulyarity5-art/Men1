@@ -1,6 +1,9 @@
 """Umumiy yordamchi funksiyalar: majburiy obuna tekshiruvi va h.k."""
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from aiogram import BaseMiddleware, Bot
@@ -8,6 +11,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import BaseFilter
 from aiogram.types import CallbackQuery, Message, TelegramObject, User as TgUser
 
+import config
 import keyboards as kb
 from database import Database
 from states import VipPaymentStates
@@ -203,3 +207,88 @@ def fmt_number(n: int | str) -> str:
     except (TypeError, ValueError):
         return str(n)
     return f"{n:,}".replace(",", " ")
+
+
+# ------------------------------------------------------------------ #
+# Filler qismlar matni
+# ------------------------------------------------------------------ #
+def format_filler_ranges(ranges: list[tuple[int, int]]) -> str:
+    """[(5, 10), (15, 15)] -> '• 5-qismdan 10-qismgacha — filler\n• 15-qism — filler'"""
+    lines = []
+    for a, b in ranges:
+        if a == b:
+            lines.append(f"• {a}-qism — filler")
+        else:
+            lines.append(f"• {a}-qismdan {b}-qismgacha — filler")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ #
+# Kanaldagi e'lonni (reyting o'zgarganda) yangilash
+# ------------------------------------------------------------------ #
+_log = logging.getLogger("anime_bot.common")
+_REFRESH_COOLDOWN = 90.0  # bir anime e'lonini ko'pi bilan 90 soniyada bir marta tahrirlaymiz (Telegram limiti uchun)
+_last_refresh: dict[int, float] = {}
+_pending_refresh: set[int] = set()
+_bg_tasks: set = set()
+
+
+async def build_announcement_markup(bot: Bot, anime):
+    """Kanal e'lonidagi '🎬 Animeni ko'rish' tugmasi (botga deep-link)."""
+    bot_info = await bot.get_me()
+    return kb.InlineKeyboardMarkup(inline_keyboard=[[
+        kb.InlineKeyboardButton(
+            text="🎬 Animeni ko'rish",
+            url=f"https://t.me/{bot_info.username}?start=anime_{anime['anime_code']}",
+        )
+    ]])
+
+
+async def refresh_channel_post(bot: Bot, db: Database, anime_id: int) -> None:
+    """Kanaldagi e'lon matnini (reytingni) yangi holatga keltiradi. Xatolik bo'lsa bot to'xtamaydi."""
+    try:
+        anime = await db.get_anime(anime_id)
+        if not anime or not anime["channel_message_id"]:
+            return  # bu anime e'loni kanalga yuborilmagan yoki xabar ID'si saqlanmagan (eski e'lon)
+        last = _last_refresh.get(anime_id)
+        if last is not None:
+            wait = _REFRESH_COOLDOWN - (time.monotonic() - last)
+            if wait > 0:
+                if anime_id in _pending_refresh:
+                    return  # allaqachon kutayotgan yangilash bor — u eng oxirgi reytingni oladi
+                _pending_refresh.add(anime_id)
+                try:
+                    await asyncio.sleep(wait)
+                finally:
+                    _pending_refresh.discard(anime_id)
+        _last_refresh[anime_id] = time.monotonic()
+
+        anime = await db.get_anime(anime_id)  # kutish paytida o'zgargan bo'lishi mumkin
+        if not anime or not anime["channel_message_id"]:
+            return
+        caption = await build_anime_card_text(db, anime)
+        markup = await build_announcement_markup(bot, anime)
+        try:
+            if anime["poster_file_id"]:
+                await bot.edit_message_caption(
+                    chat_id=config.MAIN_CHANNEL, message_id=anime["channel_message_id"],
+                    caption=caption, reply_markup=markup,
+                )
+            else:
+                await bot.edit_message_text(
+                    caption, chat_id=config.MAIN_CHANNEL, message_id=anime["channel_message_id"],
+                    reply_markup=markup,
+                )
+        except TelegramBadRequest as e:
+            if "not modified" in str(e).lower():
+                return
+            raise
+    except Exception:
+        _log.exception("Kanal e'lonini yangilashda xatolik (anime_id=%s)", anime_id)
+
+
+def schedule_channel_post_refresh(bot: Bot, db: Database, anime_id: int) -> None:
+    """Foydalanuvchiga javobni kechiktirmasdan, e'lonni fonda yangilaydi."""
+    task = asyncio.create_task(refresh_channel_post(bot, db, anime_id))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)

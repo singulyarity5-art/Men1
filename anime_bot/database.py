@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS anime (
     language     TEXT DEFAULT 'O''zbek',  -- anime kartasida ko'rsatiladigan til
     is_vip       INTEGER NOT NULL DEFAULT 0,
     is_published INTEGER NOT NULL DEFAULT 1,
+    channel_message_id INTEGER,           -- kanalga yuborilgan e'lon xabarining ID'si (reytingni yangilash uchun)
     created_at   TEXT NOT NULL
 );
 
@@ -101,7 +102,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     anime_id       INTEGER NOT NULL REFERENCES anime(id) ON DELETE CASCADE,
     season_id      INTEGER REFERENCES seasons(id) ON DELETE CASCADE,
     episode_number INTEGER NOT NULL,
-    video_file_id  TEXT NOT NULL,
+    video_file_id  TEXT NOT NULL,          -- filler qismlarda bo'sh ('')
+    is_filler      INTEGER NOT NULL DEFAULT 0,  -- 1 = filler qism (video yo'q)
     created_at     TEXT NOT NULL,
     UNIQUE (anime_id, season_id, episode_number)
 );
@@ -259,6 +261,10 @@ class Database:
         if {"country", "release_year", "language"} - anime_cols:
             await self.conn.commit()
 
+        if "channel_message_id" not in anime_cols:
+            await self.conn.execute("ALTER TABLE anime ADD COLUMN channel_message_id INTEGER")
+            await self.conn.commit()
+
         # Fasllar (seasons) tizimi: eski "episodes" jadvalida season_id ustuni
         # bo'lmasa — jadvalni xavfsiz qayta quramiz (barcha eski qismlar
         # season_id=NULL, ya'ni "oddiy anime" sifatida saqlanib qoladi,
@@ -296,6 +302,13 @@ class Database:
             await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_seasons_anime ON seasons(anime_id)")
             await self.conn.commit()
             logger.info("Migratsiya: episodes jadvaliga season_id qo'shildi, eski qismlar saqlanib qoldi.")
+
+        # Filler qismlar: eski bazalarga is_filler ustuni xavfsiz qo'shiladi
+        cur = await self.conn.execute("PRAGMA table_info(episodes)")
+        ep_cols = {row[1] for row in await cur.fetchall()}
+        if "is_filler" not in ep_cols:
+            await self.conn.execute("ALTER TABLE episodes ADD COLUMN is_filler INTEGER NOT NULL DEFAULT 0")
+            await self.conn.commit()
 
         # Yangi funksiyalar uchun jadvallar (agar hali yo'q bo'lsa) — CREATE TABLE
         # IF NOT EXISTS xavfsiz, eski ma'lumotlarga tegmaydi.
@@ -765,16 +778,19 @@ class Database:
     # ------------------------------------------------------------------ #
     # Episodes
     # ------------------------------------------------------------------ #
-    async def add_episode(self, anime_id: int, video_file_id: str, season_id: Optional[int] = None) -> aiosqlite.Row:
+    async def add_episode(
+        self, anime_id: int, video_file_id: str, season_id: Optional[int] = None, is_filler: bool = False
+    ) -> aiosqlite.Row:
+        """Yangi qism qo'shadi. is_filler=True bo'lsa video kerak emas (video_file_id bo'sh qoladi)."""
         cur = await self.conn.execute(
             "SELECT COALESCE(MAX(episode_number),0)+1 FROM episodes WHERE anime_id=? AND season_id IS ?",
             (anime_id, season_id),
         )
         (next_num,) = await cur.fetchone()
         await self.conn.execute(
-            "INSERT INTO episodes (anime_id, season_id, episode_number, video_file_id, created_at) "
-            "VALUES (?,?,?,?,?)",
-            (anime_id, season_id, next_num, video_file_id, _now()),
+            "INSERT INTO episodes (anime_id, season_id, episode_number, video_file_id, is_filler, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (anime_id, season_id, next_num, "" if is_filler else video_file_id, 1 if is_filler else 0, _now()),
         )
         await self.conn.commit()
         cur = await self.conn.execute(
@@ -818,13 +834,17 @@ class Database:
         return await cur.fetchone()
 
     async def get_next_episode(self, anime_id: int, current_episode_id: int) -> Optional[aiosqlite.Row]:
-        """Berilgan qismdan keyingisini topadi: avval xuddi shu fasl ichida, bo'lmasa keyingi fasldan 1-qism."""
+        """
+        Berilgan qismdan keyingi TOMOSHA QILINADIGAN qismni topadi: avval xuddi shu fasl ichida,
+        bo'lmasa keyingi fasllardagi birinchi qism. Filler qismlar (video yo'q) o'tkazib yuboriladi.
+        """
         cur_ep = await self.get_episode(current_episode_id)
         if not cur_ep:
             return None
         cur = await self.conn.execute(
-            "SELECT * FROM episodes WHERE anime_id=? AND season_id IS ? AND episode_number=?",
-            (anime_id, cur_ep["season_id"], cur_ep["episode_number"] + 1),
+            "SELECT * FROM episodes WHERE anime_id=? AND season_id IS ? AND episode_number>? AND is_filler=0 "
+            "ORDER BY episode_number LIMIT 1",
+            (anime_id, cur_ep["season_id"], cur_ep["episode_number"]),
         )
         nxt = await cur.fetchone()
         if nxt:
@@ -833,17 +853,33 @@ class Database:
             season = await self.get_season(cur_ep["season_id"])
             if season:
                 cur = await self.conn.execute(
-                    "SELECT id FROM seasons WHERE anime_id=? AND season_number=?",
-                    (anime_id, season["season_number"] + 1),
+                    "SELECT e.* FROM episodes e JOIN seasons s ON s.id=e.season_id "
+                    "WHERE e.anime_id=? AND s.season_number>? AND e.is_filler=0 "
+                    "ORDER BY s.season_number, e.episode_number LIMIT 1",
+                    (anime_id, season["season_number"]),
                 )
-                next_season = await cur.fetchone()
-                if next_season:
-                    cur = await self.conn.execute(
-                        "SELECT * FROM episodes WHERE anime_id=? AND season_id=? AND episode_number=1",
-                        (anime_id, next_season["id"]),
-                    )
-                    return await cur.fetchone()
+                return await cur.fetchone()
         return None
+
+    async def list_filler_ranges(self, anime_id: int, season_id: Optional[int]) -> list[tuple[int, int]]:
+        """Fasl (yoki fasllarsiz anime) ichidagi ketma-ket filler qismlarni (boshi, oxiri) oraliqlari ko'rinishida qaytaradi."""
+        cur = await self.conn.execute(
+            "SELECT episode_number FROM episodes WHERE anime_id=? AND season_id IS ? AND is_filler=1 "
+            "ORDER BY episode_number",
+            (anime_id, season_id),
+        )
+        ranges: list[tuple[int, int]] = []
+        for row in await cur.fetchall():
+            n = row[0]
+            if ranges and n == ranges[-1][1] + 1:
+                ranges[-1] = (ranges[-1][0], n)
+            else:
+                ranges.append((n, n))
+        return ranges
+
+    async def set_channel_message_id(self, anime_id: int, message_id: int) -> None:
+        await self.conn.execute("UPDATE anime SET channel_message_id=? WHERE id=?", (message_id, anime_id))
+        await self.conn.commit()
 
     async def list_recent_episodes(self, limit: int = 30) -> list[aiosqlite.Row]:
         """So'nggi qo'shilgan qismlar ("🔥 Yangi qismlar" bo'limi uchun), anime va fasl ma'lumotlari bilan."""
@@ -852,7 +888,7 @@ class Database:
             "s.season_number FROM episodes e "
             "JOIN anime a ON a.id=e.anime_id "
             "LEFT JOIN seasons s ON s.id=e.season_id "
-            "WHERE a.is_published=1 "
+            "WHERE a.is_published=1 AND e.is_filler=0 "
             "ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
             (limit,),
         )
@@ -1117,7 +1153,7 @@ class Database:
     async def stats(self) -> dict[str, Any]:
         cur = await self.conn.execute("SELECT COUNT(*) FROM anime")
         (anime_count,) = await cur.fetchone()
-        cur = await self.conn.execute("SELECT COUNT(*) FROM episodes")
+        cur = await self.conn.execute("SELECT COUNT(*) FROM episodes WHERE is_filler=0")
         (episode_count,) = await cur.fetchone()
         return {
             "users": await self.count_users(),

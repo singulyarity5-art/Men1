@@ -18,7 +18,13 @@ import config
 import keyboards as kb
 from database import Database, validate_sqlite_backup
 from handlers import user as user_handlers
-from handlers.common import IsAdminFilter, build_anime_card_text, ensure_user, fmt_number
+from handlers.common import (
+    IsAdminFilter,
+    build_anime_card_text,
+    build_announcement_markup,
+    ensure_user,
+    fmt_number,
+)
 from states import AddAnimeStates, AddEpisodeStates, AdminTextStates, BroadcastStates, EditAnimeStates
 
 logger = logging.getLogger("anime_bot.admin")
@@ -438,6 +444,9 @@ async def admin_delete_anime(call: CallbackQuery, db: Database):
 # ------------------------------------------------------------------ #
 # Qism qo'shish
 # ------------------------------------------------------------------ #
+FILLER_MARK = "__filler__"  # qism navbatida filler o'rnini belgilaydi (video yo'q)
+
+
 @router.callback_query(F.data.startswith("adm:add_episode:"))
 async def add_episode_start(call: CallbackQuery, state: FSMContext):
     """Anime sahifasidan to'g'ridan-to'g'ri qism qo'shish — FAQAT fasllarsiz (oddiy) animelar uchun."""
@@ -459,11 +468,60 @@ async def add_episode_video(message: Message, state: FSMContext):
     videos: list[str] = data.get("episode_videos", [])
     videos.append(message.video.file_id)
     await state.update_data(episode_videos=videos)
+    filler_n = sum(1 for v in videos if v == FILLER_MARK)
+    filler_txt = f", {filler_n} ta filler" if filler_n else ""
     await message.answer(
-        f"✅ Qabul qilindi (jami: {len(videos)} ta video).\n"
-        f"Yana video yuboring yoki ✅ Tayyor tugmasini bosing.",
+        f"✅ Qabul qilindi (jami: {len(videos) - filler_n} ta video{filler_txt}).\n"
+        f"Yana video yuboring, 🟡 Filler qo'shing yoki ✅ Tayyor tugmasini bosing.",
         reply_markup=kb.episode_upload_keyboard(),
     )
+
+
+@router.callback_query(AddEpisodeStates.waiting_video, F.data == "adm:episodes_filler")
+async def add_episode_filler_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(AddEpisodeStates.waiting_filler_count)
+    await call.message.answer(
+        "🟡 Nechta ketma-ket <b>filler</b> qism qo'shilsin? Raqam yuboring (masalan: <code>6</code>).\n\n"
+        "Filler qismlar navbatdagi o'rniga qo'yiladi (raqamlash buzilmaydi), video yuborish shart emas. "
+        "Foydalanuvchiga \"5-qismdan 10-qismgacha — filler\" deb yoziladi.",
+        reply_markup=kb.episode_filler_back_keyboard(),
+    )
+    await call.answer()
+
+
+@router.callback_query(AddEpisodeStates.waiting_filler_count, F.data == "adm:episodes_filler_back")
+async def add_episode_filler_back(call: CallbackQuery, state: FSMContext):
+    await state.set_state(AddEpisodeStates.waiting_video)
+    await call.message.answer(
+        "📼 Video yuborishni davom ettiring yoki ✅ Tayyor tugmasini bosing.",
+        reply_markup=kb.episode_upload_keyboard(),
+    )
+    await call.answer()
+
+
+@router.message(AddEpisodeStates.waiting_filler_count, F.text)
+async def add_episode_filler_count(message: Message, state: FSMContext):
+    txt = (message.text or "").strip()
+    if not txt.isdigit() or not (1 <= int(txt) <= 300):
+        await message.answer("❗ 1 dan 300 gacha bo'lgan raqam yuboring.", reply_markup=kb.episode_filler_back_keyboard())
+        return
+    n = int(txt)
+    data = await state.get_data()
+    videos: list[str] = data.get("episode_videos", [])
+    videos.extend([FILLER_MARK] * n)
+    await state.update_data(episode_videos=videos)
+    await state.set_state(AddEpisodeStates.waiting_video)
+    filler_n = sum(1 for v in videos if v == FILLER_MARK)
+    await message.answer(
+        f"🟡 {n} ta filler qo'shildi (navbatda: {len(videos) - filler_n} ta video, {filler_n} ta filler).\n"
+        f"Keyingi videoni yuboring yoki ✅ Tayyor tugmasini bosing.",
+        reply_markup=kb.episode_upload_keyboard(),
+    )
+
+
+@router.message(AddEpisodeStates.waiting_filler_count)
+async def add_episode_filler_wrong_type(message: Message):
+    await message.answer("❗ Iltimos, raqam yuboring (masalan: 6).", reply_markup=kb.episode_filler_back_keyboard())
 
 
 @router.message(AddEpisodeStates.waiting_video)
@@ -535,19 +593,27 @@ async def add_episode_done(call: CallbackQuery, state: FSMContext, db: Database,
         return
 
     last_episode = None
-    for file_id in videos:
-        last_episode = await db.add_episode(anime_id, file_id, season_id)
+    last_real_episode = None  # kuzatuvchilarga faqat video bor (filler bo'lmagan) qism haqida xabar beramiz
+    filler_count = 0
+    for item in videos:
+        if item == FILLER_MARK:
+            last_episode = await db.add_episode(anime_id, "", season_id, is_filler=True)
+            filler_count += 1
+        else:
+            last_episode = await db.add_episode(anime_id, item, season_id)
+            last_real_episode = last_episode
 
+    filler_txt = f" (shundan {filler_count} ta filler)" if filler_count else ""
     await call.message.answer(
-        f"✅ {len(videos)} ta qism saqlandi "
+        f"✅ {len(videos)} ta qism saqlandi{filler_txt} "
         f"(oxirgi qo'shilgani: {last_episode['episode_number']}-qism)."
     )
     await _return_after_episode_upload(call.message, db, anime_id, season_id)
     await call.answer()
 
     anime = await db.get_anime(anime_id)
-    if anime and last_episode:
-        asyncio.create_task(_notify_followers_new_episode(bot, db, anime, last_episode))
+    if anime and last_real_episode:
+        asyncio.create_task(_notify_followers_new_episode(bot, db, anime, last_real_episode))
 
 
 @router.callback_query(AddEpisodeStates.waiting_video, F.data == "adm:episodes_cancel")
@@ -683,22 +749,21 @@ async def _post_announcement(bot: Bot, db: Database, anime_id: int) -> bool:
     # Anime kartasi matni — xuddi anime sahifasidagi bilan bir xil, bitta umumiy
     # funksiyadan (qarang: handlers.common.build_anime_card_text).
     caption = await build_anime_card_text(db, anime)
-    bot_info = await bot.get_me()
     # MUHIM: bu tugma yangi ko'rish tizimi yaratmaydi — u shunchaki botni
     # deep-link bilan ochadi, so'ng BOTDAGI MAVJUD /start -> majburiy obuna ->
     # VIP tekshiruvi -> anime sahifasi oqimi (cmd_start ichidagi "anime_<code>"
     # filiali) ishlaydi, xuddi foydalanuvchi botda "Anime ID" orqali qidirgandek.
-    markup = kb.InlineKeyboardMarkup(inline_keyboard=[[
-        kb.InlineKeyboardButton(
-            text="🎬 Animeni ko'rish",
-            url=f"https://t.me/{bot_info.username}?start=anime_{anime['anime_code']}",
-        )
-    ]])
+    markup = await build_announcement_markup(bot, anime)
     try:
         if anime["poster_file_id"]:
-            await bot.send_photo(config.MAIN_CHANNEL, anime["poster_file_id"], caption=caption, reply_markup=markup)
+            sent = await bot.send_photo(config.MAIN_CHANNEL, anime["poster_file_id"], caption=caption, reply_markup=markup)
         else:
-            await bot.send_message(config.MAIN_CHANNEL, caption, reply_markup=markup)
+            sent = await bot.send_message(config.MAIN_CHANNEL, caption, reply_markup=markup)
+        try:
+            # Xabar ID'sini saqlaymiz: keyin reyting o'zgarsa, shu e'lonni tahrirlaymiz
+            await db.set_channel_message_id(anime_id, sent.message_id)
+        except Exception:
+            logger.exception("Kanal xabari ID'sini saqlashda xatolik")
         return True
     except Exception:
         logger.exception("Kanalga e'lon qilishda xatolik")

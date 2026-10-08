@@ -71,3 +71,14 @@ Bir nechta joyni o'zingizga moslab sozlashingiz kerak bo'lishi mumkin:
 SQLite (`anime.db`, WAL rejimida). `⚙️ Admin panel → 💾 Zaxira nusxa (Backup)`
 orqali istalgan vaqtda qo'lda, shuningdek har 24 soatda avtomatik zaxira
 olinadi (`backups/` papkasiga).
+
+## Filler qismlar
+- Admin qism yuklayotganda **🟡 Filler qo'shish** tugmasini bosib, nechta ketma-ket filler borligini yozadi (video yuborish shart emas).
+- Fillerlar qism raqamlashida o'z o'rnini egallaydi (raqamlar buzilmaydi), lekin tugma/video bo'lmaydi.
+- Foydalanuvchi qismlar ro'yxatida "5-qismdan 10-qismgacha — filler" ko'rinishidagi yozuvni ko'radi.
+- "Keyingi qism", "Davom ettirish" va "Yangi qismlar" fillerlarni o'tkazib yuboradi.
+
+## Kanal e'lonidagi reyting
+- Kanalga e'lon yuborilganda xabar ID'si saqlanadi. Foydalanuvchi baho bersa, e'londagi reyting avtomatik yangilanadi
+  (har bir anime uchun ko'pi bilan 90 soniyada bir marta).
+- Bu o'zgarishdan oldin yuborilgan eski e'lonlar yangilanmaydi.

@@ -18,8 +18,10 @@ from handlers.common import (
     build_subscribe_prompt,
     ensure_user,
     fmt_number,
+    format_filler_ranges,
     has_vip_access,
     is_subscribed_to_all,
+    schedule_channel_post_refresh,
 )
 from states import SearchStates, VipPaymentStates
 
@@ -37,7 +39,7 @@ async def _single_episode_id(db: Database, anime_id: int, has_seasons: bool) -> 
     if ep_count != 1:
         return None
     eps = await db.list_episodes_page(anime_id, 0, None)
-    return eps[0]["id"] if eps else None
+    return eps[0]["id"] if eps and not eps[0]["is_filler"] else None
 
 
 async def _vip_free_banner(db: Database) -> str:
@@ -560,10 +562,12 @@ async def rate_open(call: CallbackQuery, db: Database):
 
 
 @router.callback_query(F.data.startswith("rate:"))
-async def rate_submit(call: CallbackQuery, db: Database):
+async def rate_submit(call: CallbackQuery, db: Database, bot: Bot):
     _, anime_id_str, score_str = call.data.split(":")
     anime_id, score = int(anime_id_str), int(score_str)
     await db.rate_anime(anime_id, call.from_user.id, score)
+    # Kanaldagi e'londa ko'rsatilgan reytingni ham yangilab qo'yamiz (fonda, javobni kechiktirmaydi)
+    schedule_channel_post_refresh(bot, db, anime_id)
     try:
         await call.message.edit_text(f"✅ Bahoyingiz qabul qilindi: {score}⭐")
     except TelegramBadRequest:
@@ -597,6 +601,12 @@ async def show_episodes(call: CallbackQuery, db: Database):
         if season:
             season_label = f" — {season['season_number']}-fasl"
     text = f"🎬 <b>{anime['title']}</b>{season_label}\nQism raqamini tanlang ({total} ta qism):"
+    filler_ranges = await db.list_filler_ranges(anime_id, season_id)
+    if filler_ranges:
+        text += (
+            "\n\n🟡 <b>Filler qismlar</b> (asosiy syujetga aloqasi yo'q, video mavjud emas):\n"
+            + format_filler_ranges(filler_ranges)
+        )
     markup = kb.episodes_keyboard(anime_id, episodes, page, total, season_token)
     try:
         await call.message.edit_text(text, reply_markup=markup)
@@ -640,6 +650,9 @@ async def watch_episode(call: CallbackQuery, db: Database, bot: Bot):
     episode = await db.get_episode(episode_id)
     if not episode:
         await call.answer("Video topilmadi.", show_alert=True)
+        return
+    if episode["is_filler"]:
+        await call.answer("🟡 Bu qism filler — video mavjud emas.", show_alert=True)
         return
     anime = await db.get_anime(episode["anime_id"])
     if not anime:
