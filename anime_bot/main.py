@@ -16,6 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 import config
+from button_style import ButtonColorMiddleware
 from database import Database
 from handlers import admin, user
 from handlers.common import SubscriptionMiddleware
@@ -117,6 +118,8 @@ def main() -> None:
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    # Barcha tugmalarga rang beradi (yashil/qizil/ko'k) — button_style.py
+    bot.session.middleware(ButtonColorMiddleware())
     dp = Dispatcher(storage=MemoryStorage())
 
     # db obyektini barcha handlerlarga uzatamiz

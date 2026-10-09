@@ -82,3 +82,8 @@ olinadi (`backups/` papkasiga).
 - Kanalga e'lon yuborilganda xabar ID'si saqlanadi. Foydalanuvchi baho bersa, e'londagi reyting avtomatik yangilanadi
   (har bir anime uchun ko'pi bilan 90 soniyada bir marta).
 - Bu o'zgarishdan oldin yuborilgan eski e'lonlar yangilanmaydi.
+
+## Rangli tugmalar
+- Tugmalar matniga qarab avtomatik ranglanadi: yashil (ko'rish/qo'shish/tasdiqlash/VIP), qizil (o'chirish/bekor qilish), ko'k (qolganlari).
+  Raqamli tugmalar va ⬅️ ➡️ navigatsiya tugmalari rangsiz qoladi.
+- Qoidalar `button_style.py` ichida (`pick_style`). Talab: aiogram 3.25+ va yangi Telegram ilovasi (eskilarida rang ko'rinmaydi).

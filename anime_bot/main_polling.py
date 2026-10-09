@@ -21,6 +21,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
+from button_style import ButtonColorMiddleware
 from database import Database
 from handlers import admin, user
 from handlers.common import SubscriptionMiddleware
@@ -119,6 +120,8 @@ async def main() -> None:
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    # Barcha tugmalarga rang beradi (yashil/qizil/ko'k) — button_style.py
+    bot.session.middleware(ButtonColorMiddleware())
     dp = Dispatcher(storage=MemoryStorage())
 
     # db obyektini barcha handlerlarga avtomatik uzatish

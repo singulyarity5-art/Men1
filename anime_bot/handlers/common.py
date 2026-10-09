@@ -120,10 +120,13 @@ async def build_anime_card_text(db: Database, anime) -> str:
 
 async def has_vip_access(db: Database, telegram_id: int) -> bool:
     """
-    Foydalanuvchi VIP kontentga kira oladimi: o'zi haqiqiy VIP bo'lsa,
+    Foydalanuvchi VIP kontentga kira oladimi: bot egasi/admin bo'lsa, o'zi haqiqiy VIP bo'lsa,
     YOKI hozir admin yoqqan vaqtinchalik "hammaga bepul" VIP rejimi
     faol bo'lsa — True qaytaradi.
     """
+    # Bot egasi (SUPER_ADMIN_IDS) va adminlar VIP kontentni doim bepul ko'ra oladi
+    if telegram_id in config.SUPER_ADMIN_IDS or await db.is_admin(telegram_id):
+        return True
     if await db.is_vip(telegram_id):
         return True
     return await db.is_vip_free_mode()
