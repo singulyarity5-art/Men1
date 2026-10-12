@@ -11,6 +11,7 @@ Ishga tushirishdan oldin:
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import random
 from logging.handlers import RotatingFileHandler
@@ -23,7 +24,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 import config
 from button_style import ButtonColorMiddleware
 from database import Database
-from handlers import admin, user
+from handlers import admin, admin_more, discover, referral_ui, user
 from handlers.common import SubscriptionMiddleware
 
 logger = logging.getLogger("anime_bot")
@@ -87,14 +88,32 @@ async def daily_backup_job(bot: Bot, db: Database) -> None:
 
 
 async def daily_random_announcement(bot: Bot, db: Database) -> None:
-    """19-band: har kuni tasodifiy anime e'lon qilinadi (agar MAIN_CHANNEL sozlangan bo'lsa)."""
-    from handlers.admin import _post_announcement  # aylanma import'dan qochish uchun shu yerda
+    """
+    Har kuni admin paneldan belgilangan vaqtda (O'zbekiston vaqti) tasodifiy anime e'loni yuboriladi.
+    Har 30 soniyada tekshiriladi; kuniga bir marta; bot belgilangan vaqtdan keyin 3 soat ichida
+    uyg'onsa ham yuboradi (Render uxlab qolgan holat uchun).
+    """
+    from handlers.admin import _post_announcement
+    from handlers.common import parse_hhmm
 
     while True:
-        await asyncio.sleep(24 * 60 * 60)
-        if not config.MAIN_CHANNEL:
-            continue
+        await asyncio.sleep(30)
         try:
+            if not config.MAIN_CHANNEL:
+                continue
+            if await db.get_setting("daily_post_enabled", "1") != "1":
+                continue
+            now = datetime.datetime.now(config.LOCAL_TZ)
+            today = now.strftime("%Y-%m-%d")
+            if await db.get_setting("daily_post_last_date", "") == today:
+                continue
+            hhmm = parse_hhmm(await db.get_setting("daily_post_time", "12:00")) or "12:00"
+            hour, minute = int(hhmm[:2]), int(hhmm[3:])
+            scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if now < scheduled or now - scheduled > datetime.timedelta(hours=3):
+                continue
+            # Avval belgilab olamiz — xatolik bo'lsa ham bir kunda qayta-qayta urinmaydi
+            await db.set_setting("daily_post_last_date", today)
             rows = await db.all_anime_for_random()
             if not rows:
                 continue
@@ -103,7 +122,6 @@ async def daily_random_announcement(bot: Bot, db: Database) -> None:
             logger.info("Kunlik random anime e'loni yuborildi: %s", anime["title"])
         except Exception:
             logger.exception("daily_random_announcement xatolik")
-
 
 async def main() -> None:
     setup_logging()
@@ -133,7 +151,11 @@ async def main() -> None:
     dp.message.middleware(SubscriptionMiddleware())
     dp.callback_query.middleware(SubscriptionMiddleware())
 
-    dp.include_router(admin.router)  # admin filtri o'zida bo'lgani uchun avval ulaymiz
+    dp.include_router(admin.router)
+    dp.include_router(admin_more.router)
+    dp.include_router(referral_ui.admin_router)
+    dp.include_router(referral_ui.router)
+    dp.include_router(discover.router)  # admin filtri o'zida bo'lgani uchun avval ulaymiz
     dp.include_router(user.router)
 
     dp.startup.register(lambda: logger.info("Bot ishga tushdi."))

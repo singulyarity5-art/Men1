@@ -19,7 +19,7 @@ import config
 
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="🎬 Anime ko'rish")],
+        [KeyboardButton(text="🎬 Anime ko'rish"), KeyboardButton(text="🎯 Kashf qilish")],
         [KeyboardButton(text="📚 Katalog"), KeyboardButton(text="🆕 Yangi animelar")],
         [KeyboardButton(text="🔥 Mashhur animelar"), KeyboardButton(text="🔥 Yangi qismlar")],
         [KeyboardButton(text="❤️ Sevimlilar"), KeyboardButton(text="🎭 Janrlar")],
@@ -45,6 +45,7 @@ def anime_browse_hub_keyboard() -> InlineKeyboardMarkup:
     b.button(text="🔥 Mashhur animelar", callback_data="browse:popular")
     b.button(text="🔥 Yangi qismlar", callback_data="browse:recent_episodes")
     b.button(text="🎲 Tasodifiy Anime", callback_data="browse:random")
+    b.button(text="🎯 Kashf qilish", callback_data="disc:menu")
     b.adjust(1)
     return b.as_markup()
 
@@ -333,6 +334,7 @@ def subscribe_keyboard(channels) -> InlineKeyboardMarkup:
 def profile_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="💎 VIP olish", callback_data="vip_open")
+    b.button(text="🎁 Do'st taklif qilish", callback_data="ref:open")
     b.adjust(1)
     return b.as_markup()
 
@@ -353,6 +355,9 @@ def admin_panel_menu() -> InlineKeyboardMarkup:
     b.button(text="💰 VIP narxlari", callback_data="adm:vip_prices")
     b.button(text="🎁 VIP'ni vaqtincha bepul qilish", callback_data="adm:vip_free_menu")
     b.button(text="💳 To'lov ma'lumotlari", callback_data="adm:payment_info")
+    b.button(text="🎭 Janrlar", callback_data="adm:genres")
+    b.button(text="🕐 Kunlik e'lon", callback_data="adm:daily")
+    b.button(text="🎁 Referal", callback_data="adm:ref")
     b.button(text="🖼 /start rasm/matn", callback_data="adm:start_settings")
     b.button(text="🆘 Yordam matni", callback_data="adm:help_settings")
     b.button(text="💾 Zaxira nusxa (Backup)", callback_data="adm:backup_menu")
@@ -459,14 +464,16 @@ def admin_anime_detail_keyboard(anime_id: int, has_seasons: bool = False) -> Inl
         b.button(text="➕ Qism qo'shish (video yuborish)", callback_data=f"adm:add_episode:{anime_id}")
     b.button(text="✏️ Nomi", callback_data=f"adm:edit_title:{anime_id}")
     b.button(text="✏️ Tavsifi", callback_data=f"adm:edit_desc:{anime_id}")
-    b.button(text="✏️ Davlat", callback_data=f"adm:edit_country:{anime_id}")
-    b.button(text="✏️ Yil", callback_data=f"adm:edit_year:{anime_id}")
-    b.button(text="✏️ Til", callback_data=f"adm:edit_language:{anime_id}")
+    b.button(text="🖼 Poster", callback_data=f"adm:edit_poster:{anime_id}")
+    b.button(text="🌍 Davlat", callback_data=f"adm:edit_country:{anime_id}")
+    b.button(text="📅 Yil", callback_data=f"adm:edit_year:{anime_id}")
+    b.button(text="🎙 Til", callback_data=f"adm:edit_language:{anime_id}")
+    b.button(text="💬 Subtitr", callback_data=f"adm:edit_subs:{anime_id}")
     b.button(text="🎭 Janrlarni o'zgartirish", callback_data=f"adm:edit_genres:{anime_id}")
     b.button(text="📢 Kanalga e'lon qilish", callback_data=f"adm:announce:{anime_id}")
     b.button(text="🗑 O'chirish", callback_data=f"adm:delete_anime_confirm:{anime_id}")
     b.button(text="⬅️ Orqaga", callback_data="adm:anime_list:0")
-    b.adjust(1)
+    b.adjust(1, 2, 2, 2, 2, 1, 1, 1, 1)
     return b.as_markup()
 
 
@@ -572,3 +579,204 @@ def broadcast_control_keyboard(broadcast_id: int, paused: bool) -> InlineKeyboar
     else:
         b.button(text="⏸ To'xtatish", callback_data=f"adm:bc_pause:{broadcast_id}")
     return b.as_markup()
+
+
+# ------------------------------------------------------------------ #
+# Anime qo'shish/tahrirlashda davlat, til, subtitr, yilni tanlash
+# ------------------------------------------------------------------ #
+def option_picker_keyboard(options: list[tuple[str, str]], selected: list[str], multi: bool,
+                           per_row: int = 2) -> InlineKeyboardMarkup:
+    """
+    options — [(emoji, nom), ...]; selected — tanlanganlar (multi=True bo'lsa bir nechta).
+    Callback'lar: opt:pick:<i> (bitta tanlov), opt:tog:<i> (belgilash), opt:rm:<j> (qo'lda yozilganini olib tashlash),
+    opt:other, opt:done, opt:skip, opt:cancel.
+    """
+    preset_lower = {name.lower() for _, name in options}
+    sel_lower = {s.lower() for s in selected}
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for i, (emoji, name) in enumerate(options):
+        mark = "✅ " if name.lower() in sel_lower else ""
+        label = f"{mark}{emoji + ' ' if emoji else ''}{name}"
+        row.append(InlineKeyboardButton(text=label, callback_data=f"opt:{'tog' if multi else 'pick'}:{i}"))
+        if len(row) >= per_row:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if multi:
+        customs = [s for s in selected if s.lower() not in preset_lower]
+        for j, s in enumerate(customs):
+            rows.append([InlineKeyboardButton(text=f"✅ {s}  ✖", callback_data=f"opt:rm:{j}")])
+    rows.append([InlineKeyboardButton(text="✍️ Boshqa", callback_data="opt:other")])
+    if multi:
+        rows.append([InlineKeyboardButton(text="✅ Tayyor", callback_data="opt:done")])
+    rows.append([
+        InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="opt:skip"),
+        InlineKeyboardButton(text="❌ Bekor qilish", callback_data="opt:cancel"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ------------------------------------------------------------------ #
+# Admin: janrlarni boshqarish
+# ------------------------------------------------------------------ #
+def admin_genres_keyboard(genres) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for g in genres:
+        icon = "💎" if g["is_vip"] else g["emoji"]
+        row.append(InlineKeyboardButton(text=f"{icon} {g['name']}", callback_data=f"gen:open:{g['id']}"))
+        if len(row) >= 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="➕ Yangi janr", callback_data="gen:new")])
+    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:panel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_genre_detail_keyboard(genre_id: int, is_vip: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="✏️ Nomi", callback_data=f"gen:name:{genre_id}"),
+            InlineKeyboardButton(text="😀 Emoji", callback_data=f"gen:emoji:{genre_id}"),
+        ],
+        [InlineKeyboardButton(
+            text="🆓 Oddiy qilish" if is_vip else "💎 VIP qilish",
+            callback_data=f"gen:vip:{genre_id}",
+        )],
+        [InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"gen:del:{genre_id}")],
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:genres")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_genre_confirm_keyboard(yes_cb: str, back_cb: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Ha, tasdiqlayman", callback_data=yes_cb),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data=back_cb),
+    ]])
+
+
+def admin_genre_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🆓 Oddiy janr", callback_data="gen:newtype:0"),
+            InlineKeyboardButton(text="💎 VIP janr", callback_data="gen:newtype:1"),
+        ],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="gen:list")],
+    ])
+
+
+# ------------------------------------------------------------------ #
+# Admin: kunlik e'lon sozlamalari
+# ------------------------------------------------------------------ #
+DAILY_TIME_PRESETS = ["09:00", "12:00", "15:00", "18:00", "20:00", "21:00", "22:00", "23:00"]
+
+
+def admin_daily_keyboard(enabled: bool, current_time: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [[
+        InlineKeyboardButton(
+            text="⏸ O'chirish" if enabled else "✅ Yoqish",
+            callback_data="dp:toggle",
+        )
+    ]]
+    row: list[InlineKeyboardButton] = []
+    for t in DAILY_TIME_PRESETS:
+        mark = "✅ " if t == current_time else ""
+        row.append(InlineKeyboardButton(text=f"{mark}🕐 {t}", callback_data=f"dp:time:{t}"))
+        if len(row) >= 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✍️ Boshqa vaqt yozish", callback_data="dp:custom")])
+    rows.append([InlineKeyboardButton(text="🧪 Hozir sinab ko'rish", callback_data="dp:test")])
+    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:panel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ------------------------------------------------------------------ #
+# Referal
+# ------------------------------------------------------------------ #
+def referral_share_keyboard(share_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📤 Do'stlarga ulashish", url=share_url)
+    ]])
+
+
+def admin_referral_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏸ O'chirish" if enabled else "✅ Yoqish", callback_data="adm_ref:toggle")],
+        [InlineKeyboardButton(text="✏️ Taklif qilgan odam kunlari", callback_data="adm_ref:set:inviter_days")],
+        [InlineKeyboardButton(text="✏️ Taklif qilingan do'st kunlari", callback_data="adm_ref:set:invitee_days")],
+        [InlineKeyboardButton(text="✏️ Oylik chegara", callback_data="adm_ref:set:monthly_limit")],
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:panel")],
+    ])
+
+
+# ------------------------------------------------------------------ #
+# 🎯 Kashf qilish
+# ------------------------------------------------------------------ #
+def discover_menu_keyboard(liked_count: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for key, emoji, label, _genres in config.MOODS:
+        row.append(InlineKeyboardButton(text=f"{emoji} {label}", callback_data=f"disc:go:{key}"))
+        if len(row) >= 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=f"📌 Keyin ko'raman ({liked_count})", callback_data="disc:liked:0")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def discover_card_keyboard(anime_id: int, mood: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="❤️ Ko'raman", callback_data=f"disc:like:{anime_id}:{mood}", style="success"),
+            InlineKeyboardButton(text="👎 Qiziq emas", callback_data=f"disc:dis:{anime_id}:{mood}", style="danger"),
+        ],
+        [
+            InlineKeyboardButton(text="⏭ Keyingisi", callback_data=f"disc:skip:{anime_id}:{mood}"),
+            InlineKeyboardButton(text="🎬 Ko'rish", callback_data=f"disc:watch:{anime_id}"),
+        ],
+        [InlineKeyboardButton(text="🎭 Kayfiyatni o'zgartirish", callback_data="disc:menu")],
+    ])
+
+
+def discover_empty_keyboard(mood: str, liked_count: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Qaytadan boshlash", callback_data=f"disc:reset:{mood}")],
+        [InlineKeyboardButton(text=f"📌 Keyin ko'raman ({liked_count})", callback_data="disc:liked:0")],
+        [InlineKeyboardButton(text="🎭 Kayfiyatni o'zgartirish", callback_data="disc:menu")],
+    ])
+
+
+def discover_liked_keyboard(animes, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for a in animes:
+        title = a["title"] if len(a["title"]) <= 40 else a["title"][:39] + "…"
+        rows.append([InlineKeyboardButton(text=f"🎬 {title}", callback_data=f"disc:watch:{a['id']}")])
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"disc:liked:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"disc:liked:{page + 1}"))
+        rows.append(nav)
+    if animes:
+        rows.append([InlineKeyboardButton(text="🧹 Ro'yxatni tozalash", callback_data="disc:clear")])
+    rows.append([InlineKeyboardButton(text="🎭 Kashf qilishga qaytish", callback_data="disc:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def discover_clear_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Ha, tozalash", callback_data="disc:clearok"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data="disc:liked:0"),
+    ]])

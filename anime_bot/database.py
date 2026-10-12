@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import random
 import shutil
 from typing import Any, Optional
 
@@ -73,7 +74,8 @@ CREATE TABLE IF NOT EXISTS anime (
     poster_file_id TEXT,
     country      TEXT,                    -- masalan "Yaponiya" (ixtiyoriy, admin kiritadi)
     release_year TEXT,                    -- masalan "2013" yoki "2013–2023" (ixtiyoriy)
-    language     TEXT DEFAULT 'O''zbek',  -- anime kartasida ko'rsatiladigan til
+    language     TEXT DEFAULT 'O''zbek',  -- ovoz (dublyaj) tili; bir nechta bo'lsa vergul bilan
+    subtitles    TEXT,                    -- subtitr tillari (ixtiyoriy); bir nechta bo'lsa vergul bilan
     is_vip       INTEGER NOT NULL DEFAULT 0,
     is_published INTEGER NOT NULL DEFAULT 1,
     channel_message_id INTEGER,           -- kanalga yuborilgan e'lon xabarining ID'si (reytingni yangilash uchun)
@@ -166,6 +168,25 @@ CREATE TABLE IF NOT EXISTS vip_purchases (
     approved_by    INTEGER,           -- admin telegram_id
     purchased_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS discover_actions (
+    telegram_id  INTEGER NOT NULL,       -- 🎯 Kashf qilish: foydalanuvchining Telegram ID'si
+    anime_id     INTEGER NOT NULL REFERENCES anime(id) ON DELETE CASCADE,
+    action       TEXT NOT NULL,          -- 'like' (keyin ko'raman) | 'dislike' (qiziq emas) | 'skip' (keyingisi)
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (telegram_id, anime_id)
+);
+CREATE INDEX IF NOT EXISTS idx_discover_user_action ON discover_actions(telegram_id, action);
+
+CREATE TABLE IF NOT EXISTS referrals (
+    invitee_id    INTEGER PRIMARY KEY,   -- taklif qilingan odamning telegram_id (har kim faqat bir marta taklif qilinadi)
+    inviter_id    INTEGER NOT NULL,      -- taklif qilgan odamning telegram_id
+    created_at    TEXT NOT NULL,
+    rewarded_at   TEXT,                  -- mukofot berilgan vaqt (do'st majburiy kanallarga obuna bo'lgach)
+    inviter_days  INTEGER NOT NULL DEFAULT 0,
+    invitee_days  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_referrals_inviter ON referrals(inviter_id);
 
 CREATE TABLE IF NOT EXISTS pending_payments (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,6 +282,9 @@ class Database:
         if {"country", "release_year", "language"} - anime_cols:
             await self.conn.commit()
 
+        if "subtitles" not in anime_cols:
+            await self.conn.execute("ALTER TABLE anime ADD COLUMN subtitles TEXT")
+            await self.conn.commit()
         if "channel_message_id" not in anime_cols:
             await self.conn.execute("ALTER TABLE anime ADD COLUMN channel_message_id INTEGER")
             await self.conn.commit()
@@ -365,6 +389,7 @@ class Database:
                     (emoji, name, order),
                 )
                 order += 1
+        await self._seed_missing_genres()
         # Super adminlar
         for tg_id in config.SUPER_ADMIN_IDS:
             existing = await self.get_user(tg_id)
@@ -496,6 +521,221 @@ class Database:
         await self.conn.commit()
         return new_until
 
+    async def extend_vip_days(self, telegram_id: int, days: int) -> Optional[datetime.datetime]:
+        """VIP muddatini berilgan kunlarga uzaytiradi (faol muddat bo'lsa unga qo'shiladi). Foydalanuvchi yo'q bo'lsa None."""
+        user = await self.get_user(telegram_id)
+        if not user or days <= 0:
+            return None
+        now = datetime.datetime.utcnow()
+        current_until = None
+        if user["vip_until"]:
+            current_until = datetime.datetime.fromisoformat(user["vip_until"])
+        base = current_until if (current_until and current_until > now) else now
+        new_until = base + datetime.timedelta(days=days)
+        await self.conn.execute(
+            "UPDATE users SET vip_until=? WHERE telegram_id=?",
+            (new_until.isoformat(timespec="seconds"), telegram_id),
+        )
+        await self.conn.commit()
+        return new_until
+
+    # ------------------------------------------------------------------ #
+    # Referal tizimi
+    # ------------------------------------------------------------------ #
+    async def register_referral(self, invitee_id: int, inviter_id: int) -> bool:
+        """
+        Yangi foydalanuvchini kim taklif qilganini yozadi (mukofot hali berilmaydi).
+        Qoidalar: o'zini taklif qilib bo'lmaydi; taklif qiluvchi bazada bo'lishi kerak;
+        har bir odam faqat bir marta taklif qilinishi mumkin.
+        """
+        if invitee_id == inviter_id:
+            return False
+        if not await self.get_user(inviter_id):
+            return False
+        cur = await self.conn.execute(
+            "INSERT OR IGNORE INTO referrals (invitee_id, inviter_id, created_at) VALUES (?,?,?)",
+            (invitee_id, inviter_id, _now()),
+        )
+        await self.conn.commit()
+        return cur.rowcount == 1
+
+    async def get_pending_referral(self, invitee_id: int) -> Optional[aiosqlite.Row]:
+        cur = await self.conn.execute(
+            "SELECT * FROM referrals WHERE invitee_id=? AND rewarded_at IS NULL", (invitee_id,)
+        )
+        return await cur.fetchone()
+
+    async def claim_referral_reward(self, invitee_id: int, inviter_days: int, invitee_days: int,
+                                    monthly_limit: int) -> Optional[dict]:
+        """
+        Mukofotni BIR MARTA beradi (ikki jarayon bir vaqtda urinsa ham faqat bittasi oladi).
+        Taklif qiluvchi oylik chegaraga yetgan bo'lsa, unga kun berilmaydi (do'st baribir oladi).
+        """
+        row = await self.get_pending_referral(invitee_id)
+        if not row:
+            return None
+        inviter_id = row["inviter_id"]
+        if monthly_limit > 0 and inviter_days > 0:
+            month_start = datetime.datetime.utcnow().strftime("%Y-%m-01T00:00:00")
+            cur = await self.conn.execute(
+                "SELECT COUNT(*) FROM referrals WHERE inviter_id=? AND rewarded_at IS NOT NULL "
+                "AND inviter_days>0 AND rewarded_at>=?",
+                (inviter_id, month_start),
+            )
+            (done,) = await cur.fetchone()
+            if done >= monthly_limit:
+                inviter_days = 0
+        cur = await self.conn.execute(
+            "UPDATE referrals SET rewarded_at=?, inviter_days=?, invitee_days=? "
+            "WHERE invitee_id=? AND rewarded_at IS NULL",
+            (_now(), inviter_days, invitee_days, invitee_id),
+        )
+        await self.conn.commit()
+        if cur.rowcount != 1:
+            return None
+        inviter_until = await self.extend_vip_days(inviter_id, inviter_days) if inviter_days > 0 else None
+        invitee_until = await self.extend_vip_days(invitee_id, invitee_days) if invitee_days > 0 else None
+        return {
+            "inviter_id": inviter_id, "inviter_days": inviter_days, "inviter_until": inviter_until,
+            "invitee_days": invitee_days, "invitee_until": invitee_until,
+        }
+
+    async def referral_stats(self, inviter_id: int) -> tuple[int, int, int]:
+        """(jami taklif, mukofot olingani, jami olingan VIP kun)"""
+        cur = await self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN rewarded_at IS NOT NULL THEN 1 ELSE 0 END), 0), "
+            "COALESCE(SUM(inviter_days), 0) FROM referrals WHERE inviter_id=?",
+            (inviter_id,),
+        )
+        row = await cur.fetchone()
+        return row[0], row[1], row[2]
+
+    async def referral_totals(self) -> tuple[int, int, int]:
+        """(jami yozilgan taklif, mukofotlangan, berilgan jami VIP kun — ikkala tomonga)"""
+        cur = await self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN rewarded_at IS NOT NULL THEN 1 ELSE 0 END), 0), "
+            "COALESCE(SUM(inviter_days + invitee_days), 0) FROM referrals"
+        )
+        row = await cur.fetchone()
+        return row[0], row[1], row[2]
+
+    async def top_referrers(self, limit: int = 5) -> list[aiosqlite.Row]:
+        cur = await self.conn.execute(
+            "SELECT r.inviter_id, u.full_name, u.username, COUNT(*) AS rewarded, "
+            "COALESCE(SUM(r.inviter_days), 0) AS days "
+            "FROM referrals r LEFT JOIN users u ON u.telegram_id=r.inviter_id "
+            "WHERE r.rewarded_at IS NOT NULL GROUP BY r.inviter_id "
+            "ORDER BY rewarded DESC, days DESC LIMIT ?",
+            (limit,),
+        )
+        return await cur.fetchall()
+
+    # ------------------------------------------------------------------ #
+    # 🎯 Kashf qilish
+    # ------------------------------------------------------------------ #
+    async def record_discover_action(self, telegram_id: int, anime_id: int, action: str) -> bool:
+        """Birinchi harakat saqlanadi (bir kartani ikki marta bosish takror hisoblanmaydi). Yangi bo'lsa True."""
+        cur = await self.conn.execute(
+            "INSERT OR IGNORE INTO discover_actions (telegram_id, anime_id, action, created_at) VALUES (?,?,?,?)",
+            (telegram_id, anime_id, action, _now()),
+        )
+        await self.conn.commit()
+        return cur.rowcount == 1
+
+    async def count_discover_liked(self, telegram_id: int) -> int:
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) FROM discover_actions d JOIN anime a ON a.id=d.anime_id "
+            "WHERE d.telegram_id=? AND d.action='like'",
+            (telegram_id,),
+        )
+        (n,) = await cur.fetchone()
+        return n
+
+    async def list_discover_liked(self, telegram_id: int, limit: int, offset: int) -> list[aiosqlite.Row]:
+        cur = await self.conn.execute(
+            "SELECT a.* FROM discover_actions d JOIN anime a ON a.id=d.anime_id "
+            "WHERE d.telegram_id=? AND d.action='like' ORDER BY d.created_at DESC, a.id DESC LIMIT ? OFFSET ?",
+            (telegram_id, limit, offset),
+        )
+        return await cur.fetchall()
+
+    async def clear_discover_likes(self, telegram_id: int) -> None:
+        await self.conn.execute("DELETE FROM discover_actions WHERE telegram_id=? AND action='like'", (telegram_id,))
+        await self.conn.commit()
+
+    async def reset_discover(self, telegram_id: int) -> None:
+        """Qaytadan boshlash: «Qiziq emas» va «Keyingisi» belgilari tozalanadi. «Keyin ko'raman» ro'yxati saqlanadi."""
+        await self.conn.execute(
+            "DELETE FROM discover_actions WHERE telegram_id=? AND action IN ('dislike','skip')", (telegram_id,)
+        )
+        await self.conn.commit()
+
+    async def next_discover_anime(self, telegram_id: int, genre_names: Optional[list[str]] = None,
+                                  include_vip: bool = False) -> Optional[aiosqlite.Row]:
+        """
+        Foydalanuvchiga mos keyingi animeni tanlaydi.
+          * Faqat qismi (video) bor, nashr etilgan animelar; allaqachon ko'rilgan/baholangan (kashf qilishda) va
+            ko'rishni boshlagan animelar chiqmaydi; VIP animelar faqat VIP huquqi bor foydalanuvchiga.
+          * Kayfiyat bo'lsa (genre_names) — faqat shu janrlardagi animelar.
+          * Didni o'rganish: ❤️ bosilgan, sevimlilar va ko'rilgan animelar janrlari +1, 👎 bosilganlari −1;
+            reytingi yuqori animelar biroz oldinda; tasodifiylik qo'shiladi (har safar bir xil chiqmasligi uchun).
+        """
+        user = await self.get_user(telegram_id)
+        uid = user["id"] if user else -1
+        sql = (
+            "SELECT a.* FROM anime a WHERE a.is_published=1 "
+            "AND EXISTS (SELECT 1 FROM episodes e WHERE e.anime_id=a.id AND e.is_filler=0) "
+            "AND a.id NOT IN (SELECT anime_id FROM discover_actions WHERE telegram_id=?) "
+            "AND a.id NOT IN (SELECT anime_id FROM watch_progress WHERE user_id=?)"
+        )
+        params: list = [telegram_id, uid]
+        if not include_vip:
+            sql += " AND a.is_vip=0"
+        if genre_names:
+            names = [n.lower() for n in genre_names]
+            sql += (
+                " AND EXISTS (SELECT 1 FROM anime_genres ag JOIN genres g ON g.id=ag.genre_id "
+                f"WHERE ag.anime_id=a.id AND lower(g.name) IN ({','.join('?' * len(names))}))"
+            )
+            params += names
+        cur = await self.conn.execute(sql, params)
+        candidates = await cur.fetchall()
+        if not candidates:
+            return None
+
+        # janr og'irliklari (did)
+        weights: dict[int, int] = {}
+        cur = await self.conn.execute(
+            "SELECT ag.genre_id, SUM(CASE d.action WHEN 'like' THEN 1 WHEN 'dislike' THEN -1 ELSE 0 END) "
+            "FROM discover_actions d JOIN anime_genres ag ON ag.anime_id=d.anime_id "
+            "WHERE d.telegram_id=? GROUP BY ag.genre_id",
+            (telegram_id,),
+        )
+        for gid, w in await cur.fetchall():
+            weights[gid] = weights.get(gid, 0) + (w or 0)
+        for table in ("favorites", "watch_progress"):
+            cur = await self.conn.execute(
+                f"SELECT ag.genre_id, COUNT(*) FROM {table} t JOIN anime_genres ag ON ag.anime_id=t.anime_id "
+                "WHERE t.user_id=? GROUP BY ag.genre_id",
+                (uid,),
+            )
+            for gid, n in await cur.fetchall():
+                weights[gid] = weights.get(gid, 0) + n
+
+        cur = await self.conn.execute("SELECT anime_id, genre_id FROM anime_genres")
+        genres_of: dict[int, list[int]] = {}
+        for aid, gid in await cur.fetchall():
+            genres_of.setdefault(aid, []).append(gid)
+        cur = await self.conn.execute("SELECT anime_id, AVG(score) FROM ratings GROUP BY anime_id")
+        avg_of = {aid: (avg or 0) for aid, avg in await cur.fetchall()}
+
+        scored = []
+        for a in candidates:
+            taste = sum(weights.get(g, 0) for g in genres_of.get(a["id"], []))
+            scored.append((taste + 0.3 * avg_of.get(a["id"], 0) + random.random() * 1.5, a))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return random.choice(scored[:3])[1]
+
     async def expire_vips(self) -> list[int]:
         """Muddati tugagan foydalanuvchilarni tozalaydi, telegram_id ro'yxatini qaytaradi."""
         now = datetime.datetime.utcnow().isoformat(timespec="seconds")
@@ -581,6 +821,114 @@ class Database:
         return await cur.fetchone()
 
     # ------------------------------------------------------------------ #
+    # Janrlarni boshqarish
+    # ------------------------------------------------------------------ #
+    async def _seed_missing_genres(self) -> None:
+        """
+        config'dagi janrlardan bazada hali yo'qlarini BIR MARTA qo'shadi (masalan, yangi VIP janr).
+        Qaysi janrlar allaqachon "ekilgani" settings'da saqlanadi, shuning uchun admin o'chirgan janr
+        bot qayta ishga tushganda qaytib kelmaydi.
+        """
+        import json
+
+        raw = await self.get_setting("seeded_genres", "")
+        try:
+            seeded = set(json.loads(raw)) if raw else set()
+        except Exception:
+            seeded = set()
+        cur = await self.conn.execute("SELECT name FROM genres")
+        existing = {r[0].lower() for r in await cur.fetchall()}
+        cur = await self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) FROM genres")
+        (order,) = await cur.fetchone()
+        wanted = [(e, n, 0) for e, n in config.NORMAL_GENRES] + [(e, n, 1) for e, n in config.VIP_GENRES]
+        for emoji, name, is_vip in wanted:
+            if name in seeded:
+                continue
+            if name.lower() not in existing:
+                order += 1
+                await self.conn.execute(
+                    "INSERT INTO genres (emoji, name, is_vip, sort_order) VALUES (?,?,?,?)",
+                    (emoji, name, is_vip, order),
+                )
+                existing.add(name.lower())
+            seeded.add(name)
+        await self.set_setting("seeded_genres", json.dumps(sorted(seeded)))
+
+    async def genre_name_exists(self, name: str, exclude_id: Optional[int] = None) -> bool:
+        cur = await self.conn.execute(
+            "SELECT id FROM genres WHERE lower(name)=lower(?)", (name.strip(),)
+        )
+        return any(r["id"] != exclude_id for r in await cur.fetchall())
+
+    async def create_genre(self, name: str, emoji: str, is_vip: bool) -> aiosqlite.Row:
+        cur = await self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) FROM genres")
+        (order,) = await cur.fetchone()
+        cur = await self.conn.execute(
+            "INSERT INTO genres (emoji, name, is_vip, sort_order) VALUES (?,?,?,?)",
+            (emoji, name.strip(), 1 if is_vip else 0, order + 1),
+        )
+        await self.conn.commit()
+        return await self.get_genre(cur.lastrowid)
+
+    async def update_genre(self, genre_id: int, name: Optional[str] = None, emoji: Optional[str] = None) -> None:
+        if name is not None:
+            await self.conn.execute("UPDATE genres SET name=? WHERE id=?", (name.strip(), genre_id))
+        if emoji is not None:
+            await self.conn.execute("UPDATE genres SET emoji=? WHERE id=?", (emoji.strip(), genre_id))
+        await self.conn.commit()
+
+    async def count_anime_in_genre(self, genre_id: int) -> int:
+        cur = await self.conn.execute("SELECT COUNT(*) FROM anime_genres WHERE genre_id=?", (genre_id,))
+        (n,) = await cur.fetchone()
+        return n
+
+    async def genre_vip_change_preview(self, genre_id: int, make_vip: bool) -> int:
+        """Janr VIP qilinsa/oddiy qilinsa (yoki o'chirilsa) nechta animening VIP holati o'zgarishini hisoblaydi."""
+        if make_vip:
+            cur = await self.conn.execute(
+                "SELECT COUNT(*) FROM anime a JOIN anime_genres ag ON ag.anime_id=a.id "
+                "WHERE ag.genre_id=? AND a.is_vip=0",
+                (genre_id,),
+            )
+        else:
+            cur = await self.conn.execute(
+                "SELECT COUNT(*) FROM anime a JOIN anime_genres ag ON ag.anime_id=a.id "
+                "WHERE ag.genre_id=? AND a.is_vip=1 AND NOT EXISTS ("
+                "  SELECT 1 FROM anime_genres ag2 JOIN genres g2 ON g2.id=ag2.genre_id "
+                "  WHERE ag2.anime_id=a.id AND g2.is_vip=1 AND g2.id<>?)",
+                (genre_id, genre_id),
+            )
+        (n,) = await cur.fetchone()
+        return n
+
+    async def recompute_anime_vip(self, anime_ids: list[int]) -> None:
+        """Anime VIP holatini uning janrlariga qarab qayta hisoblaydi (kamida bitta VIP janr bo'lsa — VIP)."""
+        for aid in anime_ids:
+            await self.conn.execute(
+                "UPDATE anime SET is_vip = CASE WHEN EXISTS ("
+                "  SELECT 1 FROM anime_genres ag JOIN genres g ON g.id=ag.genre_id "
+                "  WHERE ag.anime_id=anime.id AND g.is_vip=1) THEN 1 ELSE 0 END WHERE id=?",
+                (aid,),
+            )
+        await self.conn.commit()
+
+    async def set_genre_vip(self, genre_id: int, is_vip: bool) -> None:
+        cur = await self.conn.execute("SELECT anime_id FROM anime_genres WHERE genre_id=?", (genre_id,))
+        anime_ids = [r[0] for r in await cur.fetchall()]
+        await self.conn.execute("UPDATE genres SET is_vip=? WHERE id=?", (1 if is_vip else 0, genre_id))
+        await self.conn.commit()
+        await self.recompute_anime_vip(anime_ids)
+
+    async def delete_genre(self, genre_id: int) -> None:
+        """Janrni o'chiradi (animelar o'chmaydi, faqat shu janr belgisi olinadi) va VIP holatlarni qayta hisoblaydi."""
+        cur = await self.conn.execute("SELECT anime_id FROM anime_genres WHERE genre_id=?", (genre_id,))
+        anime_ids = [r[0] for r in await cur.fetchall()]
+        await self.conn.execute("DELETE FROM anime_genres WHERE genre_id=?", (genre_id,))
+        await self.conn.execute("DELETE FROM genres WHERE id=?", (genre_id,))
+        await self.conn.commit()
+        await self.recompute_anime_vip(anime_ids)
+
+    # ------------------------------------------------------------------ #
     # Anime
     # ------------------------------------------------------------------ #
     async def _next_anime_code(self) -> str:
@@ -589,7 +937,9 @@ class Database:
         return str(n + 1)
 
     async def create_anime(self, title: str, description: str, poster_file_id: Optional[str],
-                            genre_ids: list[int]) -> aiosqlite.Row:
+                            genre_ids: list[int], country: Optional[str] = None,
+                            release_year: Optional[str] = None, language: Optional[str] = None,
+                            subtitles: Optional[str] = None) -> aiosqlite.Row:
         code = await self._next_anime_code()
         is_vip = 0
         if genre_ids:
@@ -600,9 +950,10 @@ class Database:
             (vip_count,) = await cur.fetchone()
             is_vip = 1 if vip_count > 0 else 0
         cur = await self.conn.execute(
-            "INSERT INTO anime (anime_code, title, description, poster_file_id, is_vip, created_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (code, title, description, poster_file_id, is_vip, _now()),
+            "INSERT INTO anime (anime_code, title, description, poster_file_id, country, release_year, "
+            "language, subtitles, is_vip, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (code, title, description, poster_file_id, country or None, release_year or None,
+             "O'zbek" if language is None else language, subtitles or None, is_vip, _now()),
         )
         anime_pk = cur.lastrowid
         for gid in genre_ids:
@@ -612,6 +963,15 @@ class Database:
             )
         await self.conn.commit()
         return await self.get_anime(anime_pk)
+
+    _ANIME_EDITABLE = {"title", "description", "poster_file_id", "country", "release_year", "language", "subtitles"}
+
+    async def update_anime_field(self, anime_id: int, field: str, value: Optional[str]) -> None:
+        """Anime maydonini xavfsiz yangilaydi (faqat ruxsat etilgan ustunlar)."""
+        if field not in self._ANIME_EDITABLE:
+            raise ValueError(f"Ruxsat etilmagan maydon: {field}")
+        await self.conn.execute(f"UPDATE anime SET {field}=? WHERE id=?", (value, anime_id))
+        await self.conn.commit()
 
     async def update_anime_genres(self, anime_id: int, genre_ids: list[int]) -> None:
         await self.conn.execute("DELETE FROM anime_genres WHERE anime_id=?", (anime_id,))

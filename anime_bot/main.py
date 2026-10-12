@@ -4,6 +4,7 @@ Test2 Bot — Webhook va Aiohttp Server.
 from __future__ import annotations
 import os
 import asyncio
+import datetime
 import logging
 import random
 from logging.handlers import RotatingFileHandler
@@ -18,7 +19,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 import config
 from button_style import ButtonColorMiddleware
 from database import Database
-from handlers import admin, user
+from handlers import admin, admin_more, discover, referral_ui, user
 from handlers.common import SubscriptionMiddleware
 
 logger = logging.getLogger("anime_bot")
@@ -81,14 +82,32 @@ async def daily_backup_job(bot: Bot, db: Database) -> None:
 
 
 async def daily_random_announcement(bot: Bot, db: Database) -> None:
-    """Har kuni tasodifiy anime e'lon qilinadi."""
+    """
+    Har kuni admin paneldan belgilangan vaqtda (O'zbekiston vaqti) tasodifiy anime e'loni yuboriladi.
+    Har 30 soniyada tekshiriladi; kuniga bir marta; bot belgilangan vaqtdan keyin 3 soat ichida
+    uyg'onsa ham yuboradi (Render uxlab qolgan holat uchun).
+    """
     from handlers.admin import _post_announcement
+    from handlers.common import parse_hhmm
 
     while True:
-        await asyncio.sleep(24 * 60 * 60)
-        if not config.MAIN_CHANNEL:
-            continue
+        await asyncio.sleep(30)
         try:
+            if not config.MAIN_CHANNEL:
+                continue
+            if await db.get_setting("daily_post_enabled", "1") != "1":
+                continue
+            now = datetime.datetime.now(config.LOCAL_TZ)
+            today = now.strftime("%Y-%m-%d")
+            if await db.get_setting("daily_post_last_date", "") == today:
+                continue
+            hhmm = parse_hhmm(await db.get_setting("daily_post_time", "12:00")) or "12:00"
+            hour, minute = int(hhmm[:2]), int(hhmm[3:])
+            scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if now < scheduled or now - scheduled > datetime.timedelta(hours=3):
+                continue
+            # Avval belgilab olamiz — xatolik bo'lsa ham bir kunda qayta-qayta urinmaydi
+            await db.set_setting("daily_post_last_date", today)
             rows = await db.all_anime_for_random()
             if not rows:
                 continue
@@ -132,6 +151,10 @@ def main() -> None:
     dp.callback_query.middleware(SubscriptionMiddleware())
 
     dp.include_router(admin.router)
+    dp.include_router(admin_more.router)
+    dp.include_router(referral_ui.admin_router)
+    dp.include_router(referral_ui.router)
+    dp.include_router(discover.router)
     dp.include_router(user.router)
 
     background_tasks = []

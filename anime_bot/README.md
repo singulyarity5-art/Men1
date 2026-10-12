@@ -87,3 +87,30 @@ olinadi (`backups/` papkasiga).
 - Tugmalar matniga qarab avtomatik ranglanadi: yashil (ko'rish/qo'shish/tasdiqlash/VIP), qizil (o'chirish/bekor qilish), ko'k (qolganlari).
   Raqamli tugmalar va ⬅️ ➡️ navigatsiya tugmalari rangsiz qoladi.
 - Qoidalar `button_style.py` ichida (`pick_style`). Talab: aiogram 3.25+ va yangi Telegram ilovasi (eskilarida rang ko'rinmaydi).
+
+## 1-bosqich yangiliklari
+- **Anime qo'shish:** janrlardan keyin davlat → til (ovoz) → subtitr → yil inline tugma bilan tanlanadi
+  (bir nechta til/subtitr belgilash mumkin, "✍️ Boshqa" bilan qo'lda yozish, "⏭ O'tkazib yuborish").
+  Tahrirlashda ham shu tugmalar (anime sahifasidagi 🌍 Davlat / 📅 Yil / 🎙 Til / 💬 Subtitr).
+- **🖼 Poster** tugmasi: animeni o'chirmasdan rasmni almashtirish yoki olib tashlash.
+- **🎭 Janrlar** (admin panel): yangi janr, nom/emoji tahrirlash, 💎 VIP ↔ 🆓 oddiy, o'chirish.
+  Janr VIP bo'lsa, undagi animelar avtomatik VIP bo'ladi (tasdiqlash bilan). **Harem** VIP janr sifatida qo'shildi.
+- **🕐 Kunlik e'lon** (admin panel): vaqtni tanlash/yozish, yoqish/o'chirish, sinab ko'rish. Vaqt O'zbekiston (UTC+5) bo'yicha;
+  boshqa mintaqa uchun `.env` da `TZ_OFFSET_HOURS`.
+
+## 2-bosqich: Referal tizimi
+- Har bir foydalanuvchining shaxsiy havolasi: `https://t.me/<bot>?start=ref_<uning Telegram ID'si>`
+  (👤 Profil → 🎁 Do'st taklif qilish yoki `/invite`). "📤 Do'stlarga ulashish" tugmasi bor.
+- Taklif qilgan odamga **7 kun**, taklif qilingan do'stga **2 kun** VIP (admin paneldan o'zgartiriladi).
+- Mukofot do'st **majburiy kanallarga obuna bo'lgach** beriladi. Faqat YANGI foydalanuvchi hisoblanadi; o'zini taklif qilib bo'lmaydi;
+  har kim faqat bir marta taklif qilinadi; mukofot ikki marta berilmaydi. VIP muddati mavjud muddatga qo'shiladi.
+- Oylik chegara (standart 30): taklif qiluvchi bir oyda shuncha do'st uchun mukofot oladi (do'st baribir oladi). 0 = chegarasiz.
+- Admin panel → 🎁 Referal: yoqish/o'chirish, kunlar, oylik chegara, statistika va eng ko'p taklif qilganlar.
+
+## 3-bosqich: 🎯 Kashf qilish
+- Asosiy menyuda **🎯 Kashf qilish** (va "🎬 Anime ko'rish" markazida ham). Kayfiyatni tanlaysiz: 😂 Kulgim kelyapti, 😭 Yig'lagim kelyapti,
+  🔥 Adrenalin, 💕 Sevgi, 😱 Qo'rqinch, 🎲 Aralash — bot mos janrlardagi anime kartasini (poster, janr, reyting, qisqa tavsif) ko'rsatadi.
+- Tugmalar: ❤️ Ko'raman («📌 Keyin ko'raman» ro'yxatiga tushadi), 👎 Qiziq emas, ⏭ Keyingisi, 🎬 Ko'rish (oddiy anime sahifasi, VIP tekshiruvi o'sha yerda).
+- Bot didingizni o'rganadi: ❤️ bosilgan, sevimlilar va ko'rilgan animelar janrlari ko'proq, 👎 bosilganlari kamroq chiqadi.
+- Chiqmaydi: videosi yo'q animelar, ko'rishni boshlagan/belgilagan animelar; VIP animelar faqat VIP huquqi borlarga.
+- Kayfiyat → janr moslashuvi `config.py` dagi `MOODS` da (janr nomlari bazadagi bilan bir xil bo'lishi kerak).

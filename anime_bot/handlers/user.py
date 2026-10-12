@@ -23,6 +23,7 @@ from handlers.common import (
     is_subscribed_to_all,
     schedule_channel_post_refresh,
 )
+from referral import process_referral_reward, register_from_payload
 from states import SearchStates, VipPaymentStates
 
 logger = logging.getLogger("anime_bot.user")
@@ -59,7 +60,15 @@ async def _vip_free_banner(db: Database) -> str:
 @router.message(CommandStart())
 async def cmd_start(message: Message, db: Database, state: FSMContext):
     await state.clear()
+    is_new_user = await db.get_user(message.from_user.id) is None
     user = await ensure_user(db, message.from_user)
+
+    args = message.text.split(maxsplit=1)
+    payload = args[1].strip() if len(args) > 1 else ""
+    # Referal havola: https://t.me/<bot>?start=ref_<taklif qiluvchi ID>. Faqat YANGI foydalanuvchi hisoblanadi
+    # va taklif obuna tekshiruvidan OLDIN yoziladi (majburiy obuna oynasida havola yo'qolmasligi uchun).
+    if is_new_user and payload.startswith("ref_"):
+        await register_from_payload(db, message.from_user.id, payload)
 
     missing = await is_subscribed_to_all(message.bot, db, message.from_user.id)
     if missing:
@@ -67,11 +76,13 @@ async def cmd_start(message: Message, db: Database, state: FSMContext):
         await message.answer(text, reply_markup=markup)
         return
 
+    # Obunadan o'tdi — referal mukofoti (agar taklif orqali kelgan bo'lsa) shu yerda beriladi
+    await process_referral_reward(message.bot, db, message.from_user.id)
+
     # Kanaldagi "▶️ Animeni ko'rish" tugmasi orqali kirilgan bo'lishi mumkin:
     # https://t.me/<bot>?start=anime_<code>
-    args = message.text.split(maxsplit=1)
-    if len(args) > 1 and args[1].startswith("anime_"):
-        code = args[1][len("anime_"):]
+    if payload.startswith("anime_"):
+        code = payload[len("anime_"):]
         anime = await db.get_anime_by_code(code)
         if anime:
             await _send_start_message(message, db, is_admin=bool(user["is_admin"]))
@@ -120,6 +131,7 @@ async def check_subs(call: CallbackQuery, db: Database):
         await call.answer("❗ Hali barcha kanallarga obuna bo'lmadingiz.", show_alert=True)
         return
     user = await ensure_user(db, call.from_user)
+    await process_referral_reward(call.bot, db, call.from_user.id)
     await call.message.delete()
     await _send_start_message(call.message, db, is_admin=bool(user["is_admin"]))
     await _maybe_show_continue_watching(call.message, db, call.from_user.id)

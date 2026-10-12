@@ -4,6 +4,7 @@ Test2 Bot — konfiguratsiya fayli.
 Bot tokenni va boshqa maxfiy qiymatlarni .env faylidan o'qiydi.
 Ishga tushirishdan oldin .env.example asosida .env fayl yarating.
 """
+import datetime
 import os
 
 try:
@@ -71,7 +72,42 @@ VIP_GENRES: list[tuple[str, str]] = [
     ("💎", "Ecchi"),
     ("💎", "Sehrli qizlar"),
     ("💎", "Hentay"),
+    ("💎", "Harem"),
 ]
+
+# --- Anime qo'shishda inline tugma bilan tanlanadigan variantlar (emoji, nom) ---
+COUNTRY_OPTIONS: list[tuple[str, str]] = [
+    ("🇯🇵", "Yaponiya"),
+    ("🇰🇷", "Koreya"),
+    ("🇨🇳", "Xitoy"),
+    ("🇺🇸", "AQSh"),
+]
+AUDIO_LANG_OPTIONS: list[tuple[str, str]] = [   # ovoz (dublyaj) tili
+    ("🇺🇿", "O'zbekcha"),
+    ("🇷🇺", "Ruscha"),
+    ("🇬🇧", "Inglizcha"),
+    ("🇯🇵", "Yaponcha"),
+]
+SUB_LANG_OPTIONS: list[tuple[str, str]] = [     # subtitr tili
+    ("🇺🇿", "O'zbekcha"),
+    ("🇷🇺", "Ruscha"),
+    ("🇬🇧", "Inglizcha"),
+]
+
+# --- 🎯 Kashf qilish: kayfiyat -> qaysi janrlardagi animelar ko'rsatiladi (janr nomlari bazadagi bilan bir xil bo'lishi kerak) ---
+# (kalit, emoji, nomi, janrlar). Janrlar bo'sh ro'yxat = hamma janr ("Aralash").
+MOODS: list[tuple[str, str, str, list[str]]] = [
+    ("laugh", "😂", "Kulgim kelyapti", ["Komediya", "Kundalik hayot"]),
+    ("cry", "😭", "Yig'lagim kelyapti", ["Drama", "Romantika", "Psixologik"]),
+    ("action", "🔥", "Adrenalin", ["Jangari", "Sarguzasht", "Sport", "Mecha"]),
+    ("love", "💕", "Sevgi", ["Romantika", "Kundalik hayot"]),
+    ("scary", "😱", "Qo'rqinch", ["Qo'rqinchli", "Triller", "Sirli", "G'ayritabiiy"]),
+    ("mix", "🎲", "Aralash", []),
+]
+
+# --- Vaqt mintaqasi (kunlik e'lon vaqti shu bo'yicha). O'zbekiston = UTC+5 ---
+TZ_OFFSET_HOURS: int = int(os.getenv("TZ_OFFSET_HOURS", "5"))
+LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=TZ_OFFSET_HOURS))
 
 # Standart sozlamalar (settings jadvaliga birinchi ishga tushirishda yoziladi)
 DEFAULT_SETTINGS = {
@@ -91,4 +127,13 @@ DEFAULT_SETTINGS = {
     "vip_price_3": "0",
     "payment_card_number": "",
     "payment_card_holder": "",
+    # Kunlik tasodifiy anime e'loni (admin paneldan boshqariladi)
+    "daily_post_enabled": "1",
+    "daily_post_time": "12:00",
+    "daily_post_last_date": "",
+    # Referal tizimi (admin paneldan boshqariladi)
+    "referral_enabled": "1",
+    "referral_inviter_days": "7",    # taklif qilgan odamga beriladigan VIP kunlari
+    "referral_invitee_days": "2",    # taklif qilingan do'stga beriladigan VIP kunlari
+    "referral_monthly_limit": "30",  # bir odam bir oyda ko'pi bilan nechta do'st uchun mukofot olishi (0 = chegarasiz)
 }

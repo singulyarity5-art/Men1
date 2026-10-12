@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, Message, TelegramObject, User as TgUser
 import config
 import keyboards as kb
 from database import Database
+from referral import process_referral_reward
 from states import VipPaymentStates
 
 
@@ -107,7 +108,9 @@ async def build_anime_card_text(db: Database, anime) -> str:
     elif ep_count > 1:
         lines.append(f"🎬 {ep_count} qism")
     if anime["language"]:
-        lines.append(f"🇺🇿 Til: {anime['language']}")
+        lines.append(f"🎙 Til: {anime['language']}")
+    if "subtitles" in anime.keys() and anime["subtitles"]:
+        lines.append(f"💬 Subtitr: {anime['subtitles']}")
     lines.append("")
     if anime["description"]:
         lines.append(f"📖 {anime['description']}")
@@ -192,6 +195,8 @@ class SubscriptionMiddleware(BaseMiddleware):
                 await event.answer(text, reply_markup=markup)
             return  # handlerga o'tkazmaymiz — harakat shu yerda to'xtaydi
 
+        # Obunadan o'tgan foydalanuvchi: kutilayotgan referal mukofoti bo'lsa, shu yerda beriladi
+        await process_referral_reward(bot, db, tg_user.id)
         return await handler(event, data)
 
 
@@ -295,3 +300,53 @@ def schedule_channel_post_refresh(bot: Bot, db: Database, anime_id: int) -> None
     task = asyncio.create_task(refresh_channel_post(bot, db, anime_id))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+
+
+# ------------------------------------------------------------------ #
+# Admin: anime tafsilot matni, vaqt formati
+# ------------------------------------------------------------------ #
+async def build_admin_anime_text(db: Database, anime_id: int) -> Optional[str]:
+    """Admin uchun anime tafsilot matni (admin_anime_detail va tahrirlashdan keyin ishlatiladi)."""
+    anime = await db.get_anime(anime_id)
+    if not anime:
+        return None
+    genres = await db.get_anime_genres(anime_id)
+    genre_txt = ", ".join(f"{g['emoji']} {g['name']}" for g in genres) or "—"
+    ep_count = await db.count_episodes(anime_id)
+    seasons = await db.list_seasons(anime_id)
+    season_line = f"📁 Fasllar: {len(seasons)}\n" if seasons else ""
+    extra = []
+    if anime["country"]:
+        extra.append(f"🌍 Davlat: {anime['country']}")
+    if anime["release_year"]:
+        extra.append(f"📅 Yil: {anime['release_year']}")
+    if anime["language"]:
+        extra.append(f"🎙 Til: {anime['language']}")
+    if "subtitles" in anime.keys() and anime["subtitles"]:
+        extra.append(f"💬 Subtitr: {anime['subtitles']}")
+    extra_txt = ("\n".join(extra) + "\n") if extra else ""
+    poster_txt = "🖼 Poster: bor\n" if anime["poster_file_id"] else "🖼 Poster: yo'q\n"
+    return (
+        f"🎬 <b>{anime['title']}</b>\n"
+        f"🆔 ID: <code>{anime['anime_code']}</code>\n"
+        f"🎭 Janr: {genre_txt}\n"
+        f"{extra_txt}"
+        f"{poster_txt}"
+        f"{season_line}"
+        f"📼 Qismlar: {ep_count}\n"
+        f"{'💎 VIP' if anime['is_vip'] else '🆓 Oddiy'}\n\n"
+        f"{anime['description'] or ''}"
+    )
+
+
+def parse_hhmm(text: str) -> Optional[str]:
+    """'9:30', '09.30', '21:05' -> '09:30' / '21:05'. Noto'g'ri bo'lsa None."""
+    import re as _re
+
+    m = _re.fullmatch(r"\s*(\d{1,2})\s*[:.]\s*(\d{2})\s*", text or "")
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if not (0 <= h <= 23 and 0 <= mi <= 59):
+        return None
+    return f"{h:02d}:{mi:02d}"

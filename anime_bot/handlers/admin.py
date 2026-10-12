@@ -18,9 +18,11 @@ import config
 import keyboards as kb
 from database import Database, validate_sqlite_backup
 from handlers import user as user_handlers
+from handlers.admin_more import begin_add_options
 from handlers.common import (
     IsAdminFilter,
     build_anime_card_text,
+    build_admin_anime_text,
     build_announcement_markup,
     ensure_user,
     fmt_number,
@@ -176,24 +178,17 @@ async def _ask_genres(message: Message, state: FSMContext, db: Database):
 
 
 @router.callback_query(AddAnimeStates.waiting_genres, F.data.startswith("pick_genre:"))
-async def add_anime_pick_genre(call: CallbackQuery, state: FSMContext, db: Database):
+async def add_anime_pick_genre(call: CallbackQuery, state: FSMContext, db: Database, bot: Bot):
     value = call.data.split(":")[1]
     data = await state.get_data()
     selected: list[int] = data.get("selected_genres", [])
 
     if value == "done":
-        title = data["new_title"]
-        description = data.get("new_description") or ""
-        poster = data.get("new_poster")
-        anime = await db.create_anime(title, description, poster, selected)
-        await state.clear()
-        vip_note = " (💎 VIP anime deb belgilandi)" if anime["is_vip"] else ""
-        await call.message.answer(
-            f"✅ «{anime['title']}» qo'shildi! ID: <code>{anime['anime_code']}</code>{vip_note}\n\n"
-            f"Endi qismlarni (video) qo'shishingiz mumkin.",
-            reply_markup=kb.admin_anime_detail_keyboard(anime["id"]),
-        )
+        # Anime hali yaratilmaydi: avval davlat -> til -> subtitr -> yil inline tugma bilan tanlanadi,
+        # keyin handlers/admin_more.py anime'ni yaratadi.
+        await state.update_data(selected_genres=selected)
         await call.answer()
+        await begin_add_options(bot, call.message.chat.id, state)
         return
 
     genre_id = int(value)
@@ -238,20 +233,8 @@ async def admin_anime_detail(call: CallbackQuery, db: Database):
     if not anime:
         await call.answer("Topilmadi.", show_alert=True)
         return
-    genres = await db.get_anime_genres(anime_id)
-    genre_txt = ", ".join(f"{g['emoji']} {g['name']}" for g in genres) or "—"
-    ep_count = await db.count_episodes(anime_id)
     seasons = await db.list_seasons(anime_id)
-    season_line = f"📁 Fasllar: {len(seasons)}\n" if seasons else ""
-    text = (
-        f"🎬 <b>{anime['title']}</b>\n"
-        f"🆔 ID: <code>{anime['anime_code']}</code>\n"
-        f"🎭 Janr: {genre_txt}\n"
-        f"{season_line}"
-        f"📼 Qismlar: {ep_count}\n"
-        f"{'💎 VIP' if anime['is_vip'] else '🆓 Oddiy'}\n\n"
-        f"{anime['description'] or ''}"
-    )
+    text = await build_admin_anime_text(db, anime_id)
     await call.message.answer(text, reply_markup=kb.admin_anime_detail_keyboard(anime_id, bool(seasons)))
     await call.answer()
 
@@ -300,77 +283,6 @@ async def admin_edit_desc_save(message: Message, state: FSMContext, db: Database
     await db.conn.commit()
     await state.clear()
     await message.answer("✅ Tavsif yangilandi.", reply_markup=kb.main_menu(is_admin=True))
-    await message.answer("⚙️ Admin panel:", reply_markup=kb.admin_panel_menu())
-
-
-@router.callback_query(F.data.startswith("adm:edit_country:"))
-async def admin_edit_country_start(call: CallbackQuery, state: FSMContext):
-    anime_id = int(call.data.split(":")[2])
-    await state.update_data(edit_anime_id=anime_id)
-    await state.set_state(EditAnimeStates.waiting_new_country)
-    await call.message.answer("✏️ Davlat nomini kiriting (masalan: Yaponiya):", reply_markup=kb.cancel_menu())
-    await call.answer()
-
-
-@router.message(EditAnimeStates.waiting_new_country)
-async def admin_edit_country_save(message: Message, state: FSMContext, db: Database):
-    if not message.text:
-        await message.answer("✏️ Iltimos, matn yuboring.")
-        return
-    data = await state.get_data()
-    anime_id = data["edit_anime_id"]
-    await db.conn.execute("UPDATE anime SET country=? WHERE id=?", (message.text.strip(), anime_id))
-    await db.conn.commit()
-    await state.clear()
-    await message.answer("✅ Davlat yangilandi.", reply_markup=kb.main_menu(is_admin=True))
-    await message.answer("⚙️ Admin panel:", reply_markup=kb.admin_panel_menu())
-
-
-@router.callback_query(F.data.startswith("adm:edit_year:"))
-async def admin_edit_year_start(call: CallbackQuery, state: FSMContext):
-    anime_id = int(call.data.split(":")[2])
-    await state.update_data(edit_anime_id=anime_id)
-    await state.set_state(EditAnimeStates.waiting_new_year)
-    await call.message.answer(
-        "✏️ Chiqqan yilini kiriting (masalan: 2021 yoki 2013–2023):", reply_markup=kb.cancel_menu()
-    )
-    await call.answer()
-
-
-@router.message(EditAnimeStates.waiting_new_year)
-async def admin_edit_year_save(message: Message, state: FSMContext, db: Database):
-    if not message.text:
-        await message.answer("✏️ Iltimos, matn yuboring.")
-        return
-    data = await state.get_data()
-    anime_id = data["edit_anime_id"]
-    await db.conn.execute("UPDATE anime SET release_year=? WHERE id=?", (message.text.strip(), anime_id))
-    await db.conn.commit()
-    await state.clear()
-    await message.answer("✅ Yil yangilandi.", reply_markup=kb.main_menu(is_admin=True))
-    await message.answer("⚙️ Admin panel:", reply_markup=kb.admin_panel_menu())
-
-
-@router.callback_query(F.data.startswith("adm:edit_language:"))
-async def admin_edit_language_start(call: CallbackQuery, state: FSMContext):
-    anime_id = int(call.data.split(":")[2])
-    await state.update_data(edit_anime_id=anime_id)
-    await state.set_state(EditAnimeStates.waiting_new_language)
-    await call.message.answer("✏️ Tilni kiriting (masalan: O'zbek):", reply_markup=kb.cancel_menu())
-    await call.answer()
-
-
-@router.message(EditAnimeStates.waiting_new_language)
-async def admin_edit_language_save(message: Message, state: FSMContext, db: Database):
-    if not message.text:
-        await message.answer("✏️ Iltimos, matn yuboring.")
-        return
-    data = await state.get_data()
-    anime_id = data["edit_anime_id"]
-    await db.conn.execute("UPDATE anime SET language=? WHERE id=?", (message.text.strip(), anime_id))
-    await db.conn.commit()
-    await state.clear()
-    await message.answer("✅ Til yangilandi.", reply_markup=kb.main_menu(is_admin=True))
     await message.answer("⚙️ Admin panel:", reply_markup=kb.admin_panel_menu())
 
 

@@ -24,6 +24,7 @@ class EditAnimeStates(StatesGroup):
     waiting_new_country = State()
     waiting_new_year = State()
     waiting_new_language = State()
+    waiting_new_poster = State()
 
 
 class AddEpisodeStates(StatesGroup):
@@ -49,3 +50,24 @@ class AdminTextStates(StatesGroup):
     waiting_grant_vip_search = State()
     waiting_user_search = State()
     waiting_backup_file = State()
+
+
+class OptionStates(StatesGroup):
+    """Anime qo'shish/tahrirlashda davlat, til, subtitr, yilni inline tugma bilan tanlash."""
+    picking = State()         # inline tugmalardan tanlash
+    waiting_custom = State()  # "✍️ Boshqa" bosilganda qo'lda yozish
+
+
+class GenreStates(StatesGroup):
+    waiting_new_name = State()
+    waiting_new_emoji = State()
+    waiting_edit_name = State()
+    waiting_edit_emoji = State()
+
+
+class DailyPostStates(StatesGroup):
+    waiting_time = State()
+
+
+class ReferralAdminStates(StatesGroup):
+    waiting_value = State()
