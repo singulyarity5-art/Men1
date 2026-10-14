@@ -14,12 +14,20 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InlineQueryResultCachedPhoto,
+    InlineQueryResultsButton,
+    InputTextMessageContent,
+    Message,
+)
 
 import keyboards as kb
 from database import Database
 from handlers.common import IsAdminFilter
-from referral import build_link, get_settings
+from referral import build_link, build_plain_link, get_settings
 from states import ReferralAdminStates
 
 logger = logging.getLogger("anime_bot.referral_ui")
@@ -78,6 +86,59 @@ async def ref_command(message: Message, db: Database, bot: Bot, state: FSMContex
     await state.clear()
     text, markup = await _user_screen(bot, db, message.from_user.id)
     await message.answer(text, reply_markup=markup)
+
+
+# ---------------------------------------------------------------- inline rejim: "📤 Do'stlarga ulashish"
+INVITE_TITLE = "🎁 Do'stni taklif qilish"
+INVITE_DESC = "Rasm, matn va «Botga o'tish» tugmasi bilan tayyor xabar"
+
+
+async def build_invite_text(db: Database) -> str:
+    """Ulashiladigan xabar matni. "N kun VIP" qatori admin paneldagi qiymatdan olinadi (0 bo'lsa chiqmaydi)."""
+    cfg = await get_settings(db)
+    lines = [
+        "🎬 <b>Animelarni o'zbek tilida tomosha qiling!</b>",
+        "✨ Minglab animelar, har kuni yangi qismlar",
+        "🎯 Kayfiyatingizga mos anime topib beradi",
+    ]
+    if cfg["enabled"] and cfg["invitee_days"] > 0:
+        lines.append(f"🎁 Mening havolam orqali kirsangiz, <b>{cfg['invitee_days']} kun VIP</b> sovg'a olasiz!")
+    return "\n".join(lines)
+
+
+@router.inline_query()
+async def invite_inline_query(query: InlineQuery, db: Database, bot: Bot):
+    """Foydalanuvchi "📤 Do'stlarga ulashish" ni bosib suhbat tanlaganda: tayyor taklif kartasini qaytaradi."""
+    uid = query.from_user.id
+    if not await db.get_user(uid):
+        # botga hali /start bosmagan — uning havolasi yaroqsiz bo'lardi
+        await query.answer(
+            [], cache_time=0, is_personal=True,
+            button=InlineQueryResultsButton(text="🚀 Avval botni ishga tushiring", start_parameter="invite"),
+        )
+        return
+    cfg = await get_settings(db)
+    link = await build_link(bot, uid) if cfg["enabled"] else await build_plain_link(bot)
+    text = await build_invite_text(db)
+    markup = kb.invite_card_keyboard(link)
+    photo = await db.get_setting("start_photo_file_id")
+
+    article = InlineQueryResultArticle(
+        id="invite", title=INVITE_TITLE, description=INVITE_DESC,
+        input_message_content=InputTextMessageContent(message_text=text, parse_mode="HTML"),
+        reply_markup=markup,
+    )
+    if photo:
+        card = InlineQueryResultCachedPhoto(
+            id="invite", photo_file_id=photo, title=INVITE_TITLE, description=INVITE_DESC,
+            caption=text, parse_mode="HTML", reply_markup=markup,
+        )
+        try:
+            await query.answer([card], cache_time=0, is_personal=True)
+            return
+        except TelegramBadRequest:
+            logger.warning("Start rasmi inline natija sifatida yaroqsiz — matnli kartaga o'tildi")
+    await query.answer([article], cache_time=0, is_personal=True)
 
 
 # ================================================================== #

@@ -702,8 +702,20 @@ def admin_daily_keyboard(enabled: bool, current_time: str) -> InlineKeyboardMark
 # Referal
 # ------------------------------------------------------------------ #
 def referral_share_keyboard(share_url: str) -> InlineKeyboardMarkup:
+    """
+    📤 Do'stlarga ulashish — inline rejim: suhbat tanlanadi va tayyor xabar (rasm + matn + «🚀 Botga o'tish» tugmasi) chiqadi.
+    🔗 Oddiy havola — zaxira: BotFather'da inline rejim yoqilmagan bo'lsa ham ishlaydi.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Do'stlarga ulashish", switch_inline_query="invite")],
+        [InlineKeyboardButton(text="🔗 Oddiy havola bilan ulashish", url=share_url)],
+    ])
+
+
+def invite_card_keyboard(link: str) -> InlineKeyboardMarkup:
+    """Ulashilgan xabar tagidagi tugma — bosilsa, taklif qiluvchining havolasi bilan botga o'tadi."""
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="📤 Do'stlarga ulashish", url=share_url)
+        InlineKeyboardButton(text="🚀 Botga o'tish", url=link)
     ]])
 
 

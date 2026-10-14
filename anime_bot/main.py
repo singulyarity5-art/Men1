@@ -161,7 +161,12 @@ def main() -> None:
 
     async def on_startup(app: web.Application) -> None:
         await db.connect()
-        await bot.set_webhook(webhook_url, drop_pending_updates=False)
+        # allowed_updates: handlerlari bor barcha turlar (shu jumladan inline_query — "📤 Do'stlarga ulashish" uchun)
+        await bot.set_webhook(
+            webhook_url,
+            drop_pending_updates=False,
+            allowed_updates=dp.resolve_used_update_types(),
+        )
         logger.info("Webhook o'rnatildi: %s", webhook_url)
 
         # Orqa fondagi (background) vazifalarni ishga tushiramiz

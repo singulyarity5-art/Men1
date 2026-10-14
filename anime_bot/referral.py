@@ -37,10 +37,19 @@ async def get_settings(db: Database) -> dict:
     }
 
 
-async def build_link(bot: Bot, telegram_id: int) -> str:
+async def _bot_username(bot: Bot) -> str:
     if "u" not in _username_cache:
         _username_cache["u"] = (await bot.get_me()).username
-    return f"https://t.me/{_username_cache['u']}?start=ref_{telegram_id}"
+    return _username_cache["u"]
+
+
+async def build_link(bot: Bot, telegram_id: int) -> str:
+    return f"https://t.me/{await _bot_username(bot)}?start=ref_{telegram_id}"
+
+
+async def build_plain_link(bot: Bot) -> str:
+    """Referalsiz oddiy bot havolasi (referal tizimi o'chiq bo'lganda ulashish uchun)."""
+    return f"https://t.me/{await _bot_username(bot)}"
 
 
 async def register_from_payload(db: Database, invitee_id: int, payload: str) -> bool:

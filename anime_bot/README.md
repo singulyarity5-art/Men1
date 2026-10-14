@@ -119,3 +119,10 @@ olinadi (`backups/` papkasiga).
 💎 VIP olish (1-qator, VIP bo'lganlarga muddatini ko'rsatadi va uzaytirishni taklif qiladi) → 🎬 Anime ko'rish → 🎯 Kashf qilish / 🆕 Yangi animelar →
 🔥 Mashhur / 🔥 Yangi qismlar → ❤️ Sevimlilar / 🎭 Janrlar → 🕐 Ko'rish tarixi / 🎁 Do'st taklif qilish → 👤 Profil / 🆘 Yordam.
 "📚 Katalog" tugmasi olib tashlandi (Janrlar bilan bir xil edi).
+
+## Ulashish (inline rejim)
+- 🎁 Do'st taklif qilish → **📤 Do'stlarga ulashish**: suhbat tanlanadi va tayyor xabar chiqadi — rasm (/start rasmi), matn va
+  **🚀 Botga o'tish** tugmasi (taklif qiluvchining havolasi bilan). "N kun VIP" admin paneldagi qiymatdan olinadi.
+- **Bir martalik sozlama:** @BotFather → `/setinline` → botni tanlang → placeholder yozing. Bu bo'lmasa inline rejim ishlamaydi
+  (zaxira: «🔗 Oddiy havola bilan ulashish» tugmasi).
+- Webhook `allowed_updates` ga `inline_query` avtomatik qo'shiladi (main.py).
