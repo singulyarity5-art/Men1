@@ -114,3 +114,8 @@ olinadi (`backups/` papkasiga).
 - Bot didingizni o'rganadi: ❤️ bosilgan, sevimlilar va ko'rilgan animelar janrlari ko'proq, 👎 bosilganlari kamroq chiqadi.
 - Chiqmaydi: videosi yo'q animelar, ko'rishni boshlagan/belgilagan animelar; VIP animelar faqat VIP huquqi borlarga.
 - Kayfiyat → janr moslashuvi `config.py` dagi `MOODS` da (janr nomlari bazadagi bilan bir xil bo'lishi kerak).
+
+## Asosiy menyu
+💎 VIP olish (1-qator, VIP bo'lganlarga muddatini ko'rsatadi va uzaytirishni taklif qiladi) → 🎬 Anime ko'rish → 🎯 Kashf qilish / 🆕 Yangi animelar →
+🔥 Mashhur / 🔥 Yangi qismlar → ❤️ Sevimlilar / 🎭 Janrlar → 🕐 Ko'rish tarixi / 🎁 Do'st taklif qilish → 👤 Profil / 🆘 Yordam.
+"📚 Katalog" tugmasi olib tashlandi (Janrlar bilan bir xil edi).

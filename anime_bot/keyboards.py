@@ -19,11 +19,12 @@ import config
 
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="🎬 Anime ko'rish"), KeyboardButton(text="🎯 Kashf qilish")],
-        [KeyboardButton(text="📚 Katalog"), KeyboardButton(text="🆕 Yangi animelar")],
+        [KeyboardButton(text="💎 VIP olish")],
+        [KeyboardButton(text="🎬 Anime ko'rish")],
+        [KeyboardButton(text="🎯 Kashf qilish"), KeyboardButton(text="🆕 Yangi animelar")],
         [KeyboardButton(text="🔥 Mashhur animelar"), KeyboardButton(text="🔥 Yangi qismlar")],
         [KeyboardButton(text="❤️ Sevimlilar"), KeyboardButton(text="🎭 Janrlar")],
-        [KeyboardButton(text="🕐 Ko'rish tarixi")],
+        [KeyboardButton(text="🕐 Ko'rish tarixi"), KeyboardButton(text="🎁 Do'st taklif qilish")],
         [KeyboardButton(text="👤 Profil"), KeyboardButton(text="🆘 Yordam")],
     ]
     if is_admin:
@@ -39,7 +40,6 @@ def anime_browse_hub_keyboard() -> InlineKeyboardMarkup:
     """
     b = InlineKeyboardBuilder()
     b.button(text="🔎 Anime qidirish", callback_data="browse:search")
-    b.button(text="📚 Katalog", callback_data="browse:catalog")
     b.button(text="🎭 Janrlar", callback_data="browse:genres")
     b.button(text="🆕 Yangi animelar", callback_data="browse:new")
     b.button(text="🔥 Mashhur animelar", callback_data="browse:popular")

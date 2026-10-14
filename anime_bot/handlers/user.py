@@ -733,6 +733,27 @@ async def profile(message: Message, db: Database):
 # ------------------------------------------------------------------ #
 # VIP sotib olish
 # ------------------------------------------------------------------ #
+@router.message(F.text == "💎 VIP olish")
+async def vip_menu_button(message: Message, db: Database, state: FSMContext):
+    """Asosiy menyudagi "💎 VIP olish" tugmasi: narxlar; VIP bo'lganlarga muddati ko'rsatilib, uzaytirish taklif qilinadi."""
+    await state.clear()
+    user = await ensure_user(db, message.from_user)
+    prices = {
+        1: await db.get_setting("vip_price_1", "0"),
+        2: await db.get_setting("vip_price_2", "0"),
+        3: await db.get_setting("vip_price_3", "0"),
+    }
+    if await db.is_vip(message.from_user.id) and user["vip_until"]:
+        head = (
+            "💎 <b>Siz VIP foydalanuvchisiz</b>\n"
+            f"⏳ Tugash sanasi: {user['vip_until'][:10]}\n\n"
+            "Muddatni uzaytirish uchun tanlang (yangi muddat mavjudiga qo'shiladi):"
+        )
+    else:
+        head = "💎 <b>VIP — cheklovlarsiz kirish</b>\n\nMuddatni tanlang:"
+    await message.answer(head, reply_markup=kb.vip_menu(prices))
+
+
 @router.callback_query(F.data == "vip_open")
 async def vip_open(call: CallbackQuery, db: Database):
     if await db.is_vip(call.from_user.id):

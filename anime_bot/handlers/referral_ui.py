@@ -72,6 +72,7 @@ async def ref_open(call: CallbackQuery, db: Database, bot: Bot):
     await call.answer()
 
 
+@router.message(F.text == "🎁 Do'st taklif qilish")
 @router.message(Command("invite"))
 async def ref_command(message: Message, db: Database, bot: Bot, state: FSMContext):
     await state.clear()
